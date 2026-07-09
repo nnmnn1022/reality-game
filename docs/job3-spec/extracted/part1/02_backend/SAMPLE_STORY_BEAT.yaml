@@ -1,0 +1,22 @@
+stage: Exploration
+purpose: 낯선 장소와 친해진다.
+
+story_beat:
+  mission:
+    interaction_pattern: Talk
+    constraint: First Stranger
+    input_type: Text
+    prompt_hint: 현지인에게 추천 장소를 물어본다.
+
+  play_rule:
+    visibility: Everyone
+    participation: Any
+    response_policy: First
+    timeout: Optional
+    completion_condition: FirstInputReceived
+
+  trigger:
+    type: InputReceived
+
+  result:
+    type: MemoryCandidate

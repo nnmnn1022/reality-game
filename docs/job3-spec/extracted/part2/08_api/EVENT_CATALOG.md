@@ -1,0 +1,17 @@
+# Event Catalog
+
+ExperienceCreated
+ExperienceStarted
+SceneRendered
+SceneDelivered
+
+PlayerSubmittedText
+PlayerUploadedPhoto
+PlayerSelectedChoice
+PlayerSkipped
+
+TimeoutReached
+MajorityReached
+
+StoryMemoryCreated
+ExperienceEnded

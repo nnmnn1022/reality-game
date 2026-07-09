@@ -1,0 +1,3 @@
+{
+ "title":"StoryBeat","type":"object","required":["mission","playRule"]
+}

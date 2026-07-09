@@ -1,0 +1,7 @@
+flow: Adventure
+target: Exploration
+stages:
+  - Exploration
+  - Discovery
+  - Challenge
+  - Reflection

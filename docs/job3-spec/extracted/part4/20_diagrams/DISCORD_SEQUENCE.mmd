@@ -1,0 +1,13 @@
+sequenceDiagram
+participant U as Players
+participant D as Discord
+participant B as Bot
+participant E as Engine
+participant R as Renderer
+
+U->>D: Input
+D->>B: Gateway Event
+B->>E: Event
+E->>R: Story Beat
+R->>B: Scene
+B->>D: Message
