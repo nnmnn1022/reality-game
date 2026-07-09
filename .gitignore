@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Local Git metadata fallback for restricted workspaces
+.repo.git/
+
+# Next.js build output and caches
+.next/
+.turbo/
+out/
+
+# Build and coverage artifacts
+build/
+dist/
+coverage/
+
+# TypeScript and test caches
+tsconfig.tsbuildinfo
+node_modules/.vite/
+
+# Local environment and runtime state
+.env
+.env.*
+!.env.example
+data/discord-sessions.json
+data/*.local.json
+data/*.secret.json
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Private key and certificate material
+*.pem
+*.key
+*.p12
+*.crt
+*.cert

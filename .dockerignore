@@ -1,0 +1,6 @@
+node_modules
+.next
+docs
+*.md
+tsconfig.tsbuildinfo
+npm-debug.log
