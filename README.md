@@ -2,6 +2,15 @@
 
 디스코드에서 진행하는 현실 미션 게임 백엔드입니다.
 
+## 최신 문서
+
+현재 기준 최신 공식 문서는 `docs/job3-spec`의 압축 패키지입니다. 루트에 있던 이전 설계 문서는 최신 상태가 아니므로 제거했습니다.
+
+- [Official Docs Part 1](docs/job3-spec/Reality_Mission_Engine_Official_Docs_Part1.zip): 핵심 제품 모델, 백엔드 구조, Discord MVP, AI 사용 정책, MVP 구현 계획
+- [Official Docs Part 2](docs/job3-spec/Reality_Mission_Engine_Official_Docs_Part2.zip): 콘텐츠 작성, API 계약, 데이터베이스 개념, 예시 플로우, 테스트 전략
+- [Official Docs Part 3](docs/job3-spec/Reality_Mission_Engine_Official_Docs_Part3.zip): 엔진 아키텍처, Discord 명령/버튼/모달, 서비스/저장소 계층, 콘텐츠 DSL
+- [Official Docs Part 4](docs/job3-spec/Reality_Mission_Engine_Official_Docs_Part4.zip): OpenAPI 개요, JSON 스키마, 다이어그램, 예시, 저장소 구조
+
 ## 실행
 
 ```bash
