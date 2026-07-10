@@ -1,0 +1,22 @@
+{
+  "name": "reality-game",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node bot.js",
+    "start": "node bot.js",
+    "bot": "node bot.js",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "discord.js": "latest",
+    "dotenv": "latest"
+  },
+  "devDependencies": {
+    "@eslint/js": "latest",
+    "eslint": "latest",
+    "vitest": "latest"
+  }
+}
