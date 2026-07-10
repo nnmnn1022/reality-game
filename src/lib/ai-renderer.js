@@ -1,5 +1,5 @@
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
-const DEFAULT_TIMEOUT_MS = 1200;
+const DEFAULT_TIMEOUT_MS = 15000;
 
 function getAiConfig() {
   const apiKey = process.env.AI_API_KEY?.trim();
@@ -48,6 +48,10 @@ async function fetchWithTimeout(url, options, timeoutMs = DEFAULT_TIMEOUT_MS) {
   }
 }
 
+function isAbortError(error) {
+  return Boolean(error && typeof error === "object" && error.name === "AbortError");
+}
+
 function extractTextFromGeminiResponse(data) {
   const candidates = Array.isArray(data?.candidates) ? data.candidates : [];
   for (const candidate of candidates) {
@@ -66,12 +70,35 @@ function extractTextFromGeminiResponse(data) {
   return null;
 }
 
-export async function renderScenePromptWithAi(context) {
+function buildAiRequestLog(result) {
+  return {
+    provider: result.provider,
+    elapsedMs: result.elapsedMs,
+    status: result.status,
+    timeoutMs: result.timeoutMs,
+    responseCode: result.responseCode ?? null
+  };
+}
+
+export async function renderScenePromptWithAiDetailed(context, options = {}) {
   const config = getAiConfig();
   if (!config) {
-    return null;
+    return {
+      provider: "Gemini",
+      status: "DISABLED",
+      text: null,
+      elapsedMs: 0,
+      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      responseCode: null,
+      requestStartedAt: new Date().toISOString(),
+      requestEndedAt: new Date().toISOString(),
+      error: null
+    };
   }
 
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const requestStartedAt = new Date().toISOString();
+  const startedAt = Date.now();
   const endpoint = `${GEMINI_BASE_URL}/models/${encodeURIComponent(config.model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
   const payload = {
     contents: [
@@ -100,18 +127,59 @@ export async function renderScenePromptWithAi(context) {
         },
         body: JSON.stringify(payload)
       },
-      DEFAULT_TIMEOUT_MS
+      timeoutMs
     );
 
     if (!response.ok) {
-      console.warn(`AI renderer fallback: Gemini response ${response.status}`);
-      return null;
+      const result = {
+        provider: "Gemini",
+        status: "ERROR",
+        text: null,
+        elapsedMs: Date.now() - startedAt,
+        timeoutMs,
+        responseCode: response.status,
+        requestStartedAt,
+        requestEndedAt: new Date().toISOString(),
+        error: `HTTP_${response.status}`
+      };
+      console.warn("AI Request", buildAiRequestLog(result));
+      return result;
     }
 
     const data = await response.json();
-    return extractTextFromGeminiResponse(data);
-  } catch {
-    console.warn("AI renderer fallback: Gemini request failed or timed out");
-    return null;
+    const text = extractTextFromGeminiResponse(data);
+    const result = {
+      provider: "Gemini",
+      status: text ? "SUCCESS" : "EMPTY",
+      text,
+      elapsedMs: Date.now() - startedAt,
+      timeoutMs,
+      responseCode: response.status,
+      requestStartedAt,
+      requestEndedAt: new Date().toISOString(),
+      error: null
+    };
+    console.info("AI Request", buildAiRequestLog(result));
+    return result;
+  } catch (error) {
+    const timedOut = isAbortError(error);
+    const result = {
+      provider: "Gemini",
+      status: timedOut ? "TIMEOUT" : "ERROR",
+      text: null,
+      elapsedMs: Date.now() - startedAt,
+      timeoutMs,
+      responseCode: null,
+      requestStartedAt,
+      requestEndedAt: new Date().toISOString(),
+      error: timedOut ? "TIMEOUT" : "REQUEST_FAILED"
+    };
+    console.warn("AI Request", buildAiRequestLog(result));
+    return result;
   }
+}
+
+export async function renderScenePromptWithAi(context, options = {}) {
+  const result = await renderScenePromptWithAiDetailed(context, options);
+  return result.text;
 }

@@ -261,10 +261,24 @@ function resumeScreenState(state) {
   return null;
 }
 
+function renderAiFailureContent() {
+  return ["⚠️ AI 접근에 실패했습니다.", "", "잠시 후 다시 시도해주세요."].join("\n");
+}
+
+function buildAiFailureButtons(disabled = false) {
+  return [
+    {
+      type: 1,
+      components: [{ type: 2, style: 1, custom_id: "scene:retry-ai", label: "재시도 하기", disabled }]
+    }
+  ];
+}
+
 async function renderPlayIntroResponse(state) {
   const frame = await buildSceneFrame(state);
   return {
     type: 7,
+    meta: frame.aiFailed ? { aiFailed: true } : undefined,
     data: {
       content: `Experience를 준비하고 있습니다...\n\n${frame.content}`,
       components: frame.components
@@ -411,7 +425,8 @@ function getSceneInputState(state) {
       submittedTypes: [],
       selectedChoice: null,
       textSubmitted: false,
-      photoSubmitted: false
+      photoSubmitted: false,
+      lastSubmittedType: null
     };
   }
   return {
@@ -419,7 +434,8 @@ function getSceneInputState(state) {
     submittedTypes: normalizeSceneInputTypes(sceneInput.submittedTypes ?? []),
     selectedChoice: typeof sceneInput.selectedChoice === "string" ? sceneInput.selectedChoice : null,
     textSubmitted: Boolean(sceneInput.textSubmitted),
-    photoSubmitted: Boolean(sceneInput.photoSubmitted)
+    photoSubmitted: Boolean(sceneInput.photoSubmitted),
+    lastSubmittedType: typeof sceneInput.lastSubmittedType === "string" ? sceneInput.lastSubmittedType : null
   };
 }
 
@@ -505,9 +521,12 @@ async function renderSceneContentWithAi(state) {
     memorySummary: state.storyMemories?.at(-1)?.summary ?? null,
     completed
   });
+  if (!aiPrompt) {
+    return null;
+  }
   return renderScene({
     title: completed ? "✅ Mission Complete" : "🎬 오늘의 장면",
-    prompt: aiPrompt ?? beat.mission.prompt_hint,
+    prompt: aiPrompt,
     detail: completed ? "입력이 모두 제출되었습니다." : null,
     memory: state.storyMemories?.at(-1) ?? null
   });
@@ -516,6 +535,9 @@ async function renderSceneContentWithAi(state) {
 function buildSceneButtons(state, disabled = false) {
   if (state.experience?.status === "Ended") {
     return [];
+  }
+  if (state.ui?.sceneRetryPending) {
+    return buildAiFailureButtons(disabled);
   }
   const beat = getCurrentExperienceBeat(state);
   if (!beat) {
@@ -569,14 +591,18 @@ function buildSceneButtons(state, disabled = false) {
 
 async function buildSceneFrame(state) {
   if (state.experience?.status === "Playing" && !getCurrentExperienceBeat(state)) {
+    const content = await renderSceneContentWithAi(state);
     return {
-      content: await renderSceneContentWithAi(state),
-      components: buildFlowButtons()
+      content: content ?? renderAiFailureContent(),
+      components: content ? buildFlowButtons() : buildAiFailureButtons(),
+      aiFailed: !content
     };
   }
+  const content = await renderSceneContentWithAi(state);
   return {
-    content: await renderSceneContentWithAi(state),
-    components: buildSceneButtons(state)
+    content: content ?? renderAiFailureContent(),
+    components: content ? buildSceneButtons(state) : buildAiFailureButtons(state.ui?.sceneRetryPending),
+    aiFailed: !content
   };
 }
 
@@ -793,7 +819,7 @@ function publishScene(state, interaction, content, sourceEventIds = []) {
 }
 
 function persistSceneResponse(state, interaction, response, sourceEventIds = [], shouldPersistScene = true) {
-  if (!shouldPersistScene || (response.type !== 4 && response.type !== 7)) {
+  if (!shouldPersistScene || response.meta?.aiFailed || (response.type !== 4 && response.type !== 7)) {
     return state;
   }
   if (!getCurrentExperienceBeat(state)) {
@@ -854,10 +880,6 @@ function applyLegacyCommand(commandName, interaction, sessionState) {
     default:
       return sessionState;
   }
-}
-
-async function renderExperienceScene(state) {
-  return await renderSceneContentWithAi(state);
 }
 
 function applySceneContinue(state) {
@@ -932,6 +954,155 @@ function pushResult(state, result) {
   };
 }
 
+function buildSceneCompletionState(state, submission, recordedEventId) {
+  const completedResult = createResult(submission.beat.id, "MissionComplete", {
+    scene_id: state.currentSceneId ?? null,
+    experience_id: state.experience?.id ?? null,
+    input_types: submission.inputTypes,
+    input_type: submission.inputType,
+    choice: submission.nextSceneInput?.selectedChoice ?? null,
+    text: typeof submission.payload?.text === "string" ? submission.payload.text : null,
+    photo_submitted: submission.inputType === "PHOTO"
+  });
+  const nextExperience = advanceExperienceProgress(state.experience, submission.beat.stage?.name ?? null);
+  const completedState = appendEvents(
+    pushResult(
+      {
+        ...state,
+        experience: nextExperience
+      },
+      completedResult
+    ),
+    [
+      createEvent("MissionCompleted", "discord-bot", {
+        scene_id: state.currentSceneId ?? null,
+        experience_id: state.experience?.id ?? null,
+        input_types: submission.inputTypes,
+        choice: submission.nextSceneInput?.selectedChoice ?? null,
+        result_id: completedResult.id,
+        event_ids: [recordedEventId].filter(Boolean)
+      }),
+      createEvent("ResultCreated", "discord-bot", {
+        result_id: completedResult.id,
+        story_beat_id: completedResult.storyBeatId,
+        scene_id: state.currentSceneId ?? null,
+        experience_id: state.experience?.id ?? null
+      }),
+      createEvent("ExperienceProgressUpdated", "discord-bot", {
+        experience_id: state.experience?.id ?? null,
+        completed_stage: submission.beat.stage?.name ?? null,
+        achieved: nextExperience?.coverage?.achieved ?? [],
+        pending: nextExperience?.coverage?.pending ?? []
+      })
+    ]
+  );
+  return {
+    ...withUi(completedState, {
+      sceneInput: null,
+      sceneRetryPending: false
+    }),
+    completedResult
+  };
+}
+
+async function attemptSceneCompletion(state, submission) {
+  const recordedEventId = state.events?.at(-1)?.id ?? null;
+  const completedState = buildSceneCompletionState(state, submission, recordedEventId);
+  const progressed = withUi(applySceneContinue(completedState), {
+    screen: "playing",
+    sceneInput: null,
+    sceneRetryPending: false
+  });
+  const renderedContent = await renderSceneContentWithAi(progressed);
+  if (!renderedContent) {
+    const retryState = withUi(state, {
+      screen: "playing",
+      sceneRetryPending: true,
+      statusMessage: "AI 접근에 실패했습니다."
+    });
+    return {
+      state: retryState,
+      response: {
+        type: 7,
+        meta: { aiFailed: true },
+        data: {
+          content: renderAiFailureContent(),
+          components: buildAiFailureButtons()
+        }
+      },
+      completed: false
+    };
+  }
+  return {
+    state: progressed,
+    response: {
+      type: 7,
+      data: {
+        content: renderedContent,
+        components: buildSceneButtons(progressed)
+      }
+    },
+    completed: true
+  };
+}
+
+async function retrySceneRender(state) {
+  const content = await renderSceneContentWithAi(state);
+  if (!content) {
+    return {
+      state: withUi(state, {
+        sceneRetryPending: true,
+        statusMessage: "AI 접근에 실패했습니다."
+      }),
+      response: {
+        type: 7,
+        meta: { aiFailed: true },
+        data: {
+          content: renderAiFailureContent(),
+          components: buildAiFailureButtons()
+        }
+      },
+      completed: false
+    };
+  }
+  const retryState = withUi(state, {
+    sceneRetryPending: false,
+    statusMessage: "Scene을 다시 불러왔습니다."
+  });
+  return {
+    state: retryState,
+    response: {
+      type: 7,
+      data: {
+        content,
+        components: buildSceneButtons(retryState)
+      }
+    },
+    completed: true
+  };
+}
+
+function buildRetrySceneSubmission(state) {
+  const beat = getCurrentExperienceBeat(state);
+  if (!beat) {
+    return null;
+  }
+  const sceneInput = getSceneInputState(state);
+  const { inputTypes } = getSceneInputDefinition(beat);
+  if (!isSceneInputSatisfied(sceneInput, inputTypes)) {
+    return null;
+  }
+  return {
+    beat,
+    inputTypes,
+    nextSceneInput: sceneInput,
+    inputType:
+      sceneInput.lastSubmittedType ??
+      (sceneInput.selectedChoice ? "CHOICE" : sceneInput.photoSubmitted ? "PHOTO" : "TEXT"),
+    payload: {}
+  };
+}
+
 function submitSceneInput(state, interaction, inputType, payload) {
   const eventType =
     inputType === "PHOTO" ? "PlayerUploadedPhoto" : inputType === "CHOICE" ? "PlayerSelectedChoice" : "PlayerSubmittedText";
@@ -950,6 +1121,7 @@ function submitSceneInput(state, interaction, inputType, payload) {
   if (inputType === "CHOICE" && typeof payload.choice === "string") {
     nextSceneInput.selectedChoice = payload.choice;
   }
+  nextSceneInput.lastSubmittedType = inputType;
   const updated = setSceneInputState(recorded, nextSceneInput);
   const beat = getCurrentExperienceBeat(updated);
   if (!beat) {
@@ -957,54 +1129,17 @@ function submitSceneInput(state, interaction, inputType, payload) {
   }
   const { inputTypes } = getSceneInputDefinition(beat);
   if (!isSceneInputSatisfied(nextSceneInput, inputTypes)) {
-    return { state: updated, completed: false };
+    return { state: updated, completed: false, beat, inputTypes, nextSceneInput };
   }
-  const completedResult = createResult(beat.id, "MissionComplete", {
-    scene_id: updated.currentSceneId ?? null,
-    experience_id: updated.experience?.id ?? null,
-    input_types: inputTypes,
-    input_type: inputType,
-    choice: nextSceneInput.selectedChoice ?? null,
-    text: typeof payload.text === "string" ? payload.text : null,
-    photo_submitted: inputType === "PHOTO"
-  });
-  const nextExperience = advanceExperienceProgress(updated.experience, beat.stage?.name ?? null);
-  const completedState = appendEvents(
-    pushResult(
-      {
-        ...updated,
-        experience: nextExperience
-      },
-      completedResult
-    ),
-    [
-      createEvent("MissionCompleted", "discord-bot", {
-        scene_id: updated.currentSceneId ?? null,
-        experience_id: updated.experience?.id ?? null,
-        input_types: inputTypes,
-        choice: nextSceneInput.selectedChoice ?? null,
-        result_id: completedResult.id,
-        event_ids: [recorded.events?.at(-1)?.id].filter(Boolean)
-      }),
-      createEvent("ResultCreated", "discord-bot", {
-        result_id: completedResult.id,
-        story_beat_id: completedResult.storyBeatId,
-        scene_id: updated.currentSceneId ?? null,
-        experience_id: updated.experience?.id ?? null
-      }),
-      createEvent("ExperienceProgressUpdated", "discord-bot", {
-        experience_id: updated.experience?.id ?? null,
-        completed_stage: beat.stage?.name ?? null,
-        achieved: nextExperience?.coverage?.achieved ?? [],
-        pending: nextExperience?.coverage?.pending ?? []
-      })
-    ]
-  );
-  const progressed = withUi(applySceneContinue(completedState), {
-    screen: "playing",
-    sceneInput: null
-  });
-  return { state: progressed, completed: true };
+  return {
+    state: updated,
+    completed: true,
+    beat,
+    inputTypes,
+    nextSceneInput,
+    inputType,
+    payload
+  };
 }
 
 export async function handleDiscordInteraction(interaction) {
@@ -1061,11 +1196,13 @@ export async function handleDiscordInteraction(interaction) {
         ),
         interaction
       );
+      const frame = await buildSceneFrame(nextState);
       const response = {
         type: 4,
+        meta: frame.aiFailed ? { aiFailed: true } : undefined,
         data: {
-          content: `Experience가 생성되었습니다.\n\n${await renderExperienceScene(nextState)}`,
-          components: nextState.experience?.flowId == null ? buildFlowButtons() : [...buildFlowButtons(), ...buildSceneButtons(nextState)]
+          content: `Experience가 생성되었습니다.\n\n${frame.content}`,
+          components: nextState.experience?.flowId == null ? buildFlowButtons() : [...buildFlowButtons(), ...frame.components]
         }
       };
       const published = prepareSession(persistSceneResponse(nextState, interaction, response, [createdEvent.id], true), interaction);
@@ -1307,13 +1444,18 @@ export async function handleDiscordInteraction(interaction) {
         choice
       });
       const nextState = prepareSession(submission.state, interaction);
-      const response = submission.completed ? await panelResponse(nextState) : await updateResponse(nextState);
       if (submission.completed) {
-        const published = prepareSession(persistSceneResponse(nextState, interaction, response), interaction);
-        await saveUpdatedSession(interaction, published);
-      } else {
-        await saveUpdatedSession(interaction, nextState);
+        const attempted = await attemptSceneCompletion(nextState, submission);
+        if (attempted.completed) {
+          const published = prepareSession(persistSceneResponse(attempted.state, interaction, attempted.response), interaction);
+          await saveUpdatedSession(interaction, published);
+        } else {
+          await saveUpdatedSession(interaction, prepareSession(attempted.state, interaction));
+        }
+        return attempted.response;
       }
+      const response = await updateResponse(nextState);
+      await saveUpdatedSession(interaction, nextState);
       return response;
     }
     if (customId === "scene:upload-photo") {
@@ -1322,14 +1464,38 @@ export async function handleDiscordInteraction(interaction) {
         player_name: author.name
       });
       const nextState = prepareSession(submission.state, interaction);
-      const response = submission.completed ? await panelResponse(nextState) : await updateResponse(nextState);
       if (submission.completed) {
-        const published = prepareSession(persistSceneResponse(nextState, interaction, response), interaction);
-        await saveUpdatedSession(interaction, published);
-      } else {
-        await saveUpdatedSession(interaction, nextState);
+        const attempted = await attemptSceneCompletion(nextState, submission);
+        if (attempted.completed) {
+          const published = prepareSession(persistSceneResponse(attempted.state, interaction, attempted.response), interaction);
+          await saveUpdatedSession(interaction, published);
+        } else {
+          await saveUpdatedSession(interaction, prepareSession(attempted.state, interaction));
+        }
+        return attempted.response;
       }
+      const response = await updateResponse(nextState);
+      await saveUpdatedSession(interaction, nextState);
       return response;
+    }
+    if (customId === "scene:retry-ai") {
+      const retrySubmission = buildRetrySceneSubmission(sessionState);
+      if (retrySubmission) {
+      const attempted = await attemptSceneCompletion(sessionState, retrySubmission);
+        if (attempted.completed) {
+          const published = prepareSession(persistSceneResponse(attempted.state, interaction, attempted.response), interaction);
+          await saveUpdatedSession(interaction, published);
+        } else {
+          await saveUpdatedSession(interaction, prepareSession(attempted.state, interaction));
+        }
+        return attempted.response;
+      }
+      const retried = await retrySceneRender(sessionState);
+      const published = retried.completed
+        ? prepareSession(persistSceneResponse(retried.state, interaction, retried.response), interaction)
+        : prepareSession(retried.state, interaction);
+      await saveUpdatedSession(interaction, published);
+      return retried.response;
     }
     if (customId.startsWith("flow:")) {
       const flowId = customId.slice("flow:".length);
@@ -1347,13 +1513,18 @@ export async function handleDiscordInteraction(interaction) {
         text: values.answer ?? values.text ?? ""
       });
       const nextState = prepareSession(submission.state, interaction);
-      const response = submission.completed ? await panelResponse(nextState) : await updateResponse(nextState);
       if (submission.completed) {
-        const published = prepareSession(persistSceneResponse(nextState, interaction, response), interaction);
-        await saveUpdatedSession(interaction, published);
-      } else {
-        await saveUpdatedSession(interaction, nextState);
+        const attempted = await attemptSceneCompletion(nextState, submission);
+        if (attempted.completed) {
+          const published = prepareSession(persistSceneResponse(attempted.state, interaction, attempted.response), interaction);
+          await saveUpdatedSession(interaction, published);
+        } else {
+          await saveUpdatedSession(interaction, prepareSession(attempted.state, interaction));
+        }
+        return attempted.response;
       }
+      const response = await updateResponse(nextState);
+      await saveUpdatedSession(interaction, nextState);
       return response;
     }
     if (customId === "game:complete") {

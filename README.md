@@ -55,7 +55,7 @@ AI_API_KEY=AI 제공자 API 키
 ```
 
 `DISCORD_GUILD_ID`를 넣으면 해당 서버에만 슬래시 명령어를 등록합니다. 생략하면 전역 명령어로 등록합니다.
-`AI_MODEL`과 `AI_API_KEY`는 Scene renderer 연결용이며, 값이 없으면 로컬 렌더러로 자동 폴백합니다.
+`AI_MODEL`과 `AI_API_KEY`는 Scene renderer 연결용입니다. 둘 중 하나라도 없거나 AI 호출이 15초 안에 끝나지 않으면 Scene은 생성하지 않고 실패 UI와 `재시도 하기` 버튼을 보여줍니다.
 
 ## 로비 흐름
 
@@ -67,6 +67,7 @@ AI_API_KEY=AI 제공자 API 키
 
 Lobby는 하나의 메시지를 계속 edit 합니다. Experience가 시작되면 Scene 화면으로 전환되고, Lobby 버튼은 사라집니다.
 Scene의 입력 버튼은 Mission의 `inputType`과 선택지 정의를 따라 동적으로 생성됩니다.
+AI Scene 렌더링은 최대 15초를 기다리며, 실패 시 fallback Scene 없이 오류 UI와 `재시도 하기` 버튼을 표시합니다.
 
 ## 검증
 

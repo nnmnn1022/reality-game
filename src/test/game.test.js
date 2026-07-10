@@ -8,6 +8,7 @@ import { listFlows } from "../lib/experience.js";
 describe("discord reality mission engine", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 
   function makeUser(id, username) {
@@ -216,9 +217,63 @@ describe("discord reality mission engine", () => {
     expect(session?.state.storyMemories?.at(-1)?.summary).toContain("오늘의 첫 기록");
   });
 
+  it("shows a retry button when AI scene rendering fails", async () => {
+    const storagePath = join(mkdtempSync(join(tmpdir(), "reality-game-")), "discord-sessions.json");
+    vi.stubEnv("DISCORD_STORAGE_PATH", storagePath);
+
+    const { handleDiscordInteraction } = await import("../lib/discord-interactions.js");
+
+    const startResponse = await handleDiscordInteraction({
+      id: "interaction-ai-fail",
+      type: 2,
+      token: "token",
+      guild_id: "guild-ai",
+      channel_id: "channel-ai",
+      data: {
+        name: "start-experience",
+        options: [
+          { name: "players", value: "민지" },
+          { name: "flow", value: "random" }
+        ]
+      },
+      member: {
+        user: {
+          id: "user-ai",
+          username: "민지"
+        }
+      }
+    });
+
+    expect(startResponse.type).toBe(4);
+    expect(startResponse.data?.content).toContain("AI 접근에 실패했습니다.");
+    expect(
+      startResponse.data?.components?.some((row) =>
+        row.components?.some((component) => component.custom_id === "scene:retry-ai")
+      )
+    ).toBe(true);
+  });
+
   it("tracks documented flows and persists public scenes", async () => {
     const storagePath = join(mkdtempSync(join(tmpdir(), "reality-game-")), "discord-sessions.json");
     vi.stubEnv("DISCORD_STORAGE_PATH", storagePath);
+    vi.stubEnv("AI_MODEL", "gemini-test");
+    vi.stubEnv("AI_API_KEY", "test-key");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: "오늘의 장면을 이어갑니다." }]
+              }
+            }
+          ]
+        })
+      }))
+    );
 
     expect(listFlows().map((flow) => flow.id)).toEqual(["adventure", "bond", "mystery", "chaos-trip", "random"]);
 
@@ -388,6 +443,24 @@ describe("discord reality mission engine", () => {
   it("automatically advances to the next scene when all mission inputs are submitted", async () => {
     const storagePath = join(mkdtempSync(join(tmpdir(), "reality-game-")), "discord-sessions.json");
     vi.stubEnv("DISCORD_STORAGE_PATH", storagePath);
+    vi.stubEnv("AI_MODEL", "gemini-test");
+    vi.stubEnv("AI_API_KEY", "test-key");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: "오늘의 장면을 이어갑니다." }]
+              }
+            }
+          ]
+        })
+      }))
+    );
 
     const { handleDiscordInteraction } = await import("../lib/discord-interactions.js");
     const { loadSession } = await import("../lib/session-store.js");
@@ -462,7 +535,7 @@ describe("discord reality mission engine", () => {
       }
     });
 
-    expect(photoResponse.type).toBe(4);
+    expect(photoResponse.type).toBe(7);
     expect(photoResponse.data?.content).toContain("🎬 오늘의 장면");
 
     const session = await loadSession("guild-auto:channel-auto");

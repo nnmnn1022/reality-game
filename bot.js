@@ -164,6 +164,19 @@ function toRawInteraction(interaction) {
   return base;
 }
 
+function shouldDeferInteraction(interaction) {
+  if (interaction.isModalSubmit()) {
+    return true;
+  }
+  if (interaction.isChatInputCommand()) {
+    return ["start", "start-experience", "choose-flow", "continue", "end"].includes(interaction.commandName);
+  }
+  if (interaction.isButton()) {
+    return ["lobby:ready", "scene:upload-photo", "scene:retry-ai"].includes(interaction.customId) || interaction.customId.startsWith("flow:");
+  }
+  return false;
+}
+
 async function respondFromHandler(interaction, response) {
   if (response.type === 1) {
     return;
@@ -180,13 +193,13 @@ async function respondFromHandler(interaction, response) {
     ephemeral: response.data?.flags === 64
   };
 
-  if (response.type === 7 && interaction.isMessageComponent()) {
+  if (response.type === 7 && interaction.isMessageComponent() && !interaction.deferred && !interaction.replied) {
     await interaction.update(payload);
     return;
   }
 
   if (interaction.deferred || interaction.replied) {
-    await interaction.followUp(payload);
+    await interaction.editReply(payload);
     return;
   }
 
@@ -229,6 +242,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand() && !interaction.isButton() && !interaction.isModalSubmit()) {
       return;
     }
+    if (shouldDeferInteraction(interaction)) {
+      if (interaction.isButton()) {
+        await interaction.deferUpdate();
+      } else {
+        await interaction.deferReply();
+      }
+    }
     const rawInteraction = toRawInteraction(interaction);
     const response = await handleDiscordInteraction(rawInteraction);
     await respondFromHandler(interaction, response);
@@ -236,7 +256,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     console.error(error);
     const message = `오류: ${error instanceof Error ? error.message : String(error)}`;
     if (interaction.deferred || interaction.replied) {
-      await interaction.followUp({ content: message, ephemeral: true });
+      await interaction.editReply({ content: message });
     } else {
       await interaction.reply({ content: message, ephemeral: true });
     }
