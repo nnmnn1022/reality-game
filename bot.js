@@ -10,9 +10,11 @@ import {
   REST,
   Routes,
   SlashCommandBuilder,
+  MessageFlags,
   TextInputBuilder,
   TextInputStyle
 } from "discord.js";
+import { handleDiscordObservation } from "./src/lib/discord-interactions.js";
 import { handleDiscordInteraction } from "./src/lib/discord-interactions.js";
 
 const token = process.env.DISCORD_TOKEN;
@@ -45,7 +47,12 @@ function buildCommands() {
     new SlashCommandBuilder().setName("choose-flow").setDescription("경험 흐름을 선택합니다."),
     new SlashCommandBuilder().setName("begin").setDescription("메인 메뉴를 엽니다."),
     new SlashCommandBuilder().setName("continue").setDescription("다음 장면으로 진행합니다."),
-    new SlashCommandBuilder().setName("end").setDescription("경험을 종료합니다.")
+    new SlashCommandBuilder().setName("end").setDescription("경험을 종료합니다."),
+    new SlashCommandBuilder()
+      .setName("upload-photo")
+      .setDescription("사진을 제출합니다.")
+      .addAttachmentOption((option) => option.setName("photo").setDescription("제출할 사진").setRequired(true))
+      .addStringOption((option) => option.setName("note").setDescription("사진에 대한 짧은 설명"))
   ];
 
   optionString(commands[0], "players", "참가자 이름을 쉼표로 구분해 입력합니다.");
@@ -169,7 +176,7 @@ function shouldDeferInteraction(interaction) {
     return true;
   }
   if (interaction.isChatInputCommand()) {
-    return ["start", "start-experience", "choose-flow", "continue", "end"].includes(interaction.commandName);
+    return ["start", "start-experience", "choose-flow", "continue", "end", "upload-photo"].includes(interaction.commandName);
   }
   if (interaction.isButton()) {
     return ["lobby:ready", "scene:upload-photo", "scene:retry-ai"].includes(interaction.customId) || interaction.customId.startsWith("flow:");
@@ -242,6 +249,45 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand() && !interaction.isButton() && !interaction.isModalSubmit()) {
       return;
     }
+    if (interaction.isChatInputCommand() && interaction.commandName === "upload-photo") {
+      const attachment = interaction.options.getAttachment("photo");
+      if (!attachment) {
+        await interaction.reply({
+          content: "사진 파일을 첨부해 주세요.",
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+
+      await interaction.deferReply();
+      const note = interaction.options.getString("note") ?? "";
+      const sessionKey = `${interaction.guildId ?? "dm"}:${interaction.channelId}`;
+      const result = await handleDiscordObservation(sessionKey, {
+        type: "photo",
+        sourceId: interaction.user.id,
+        sourceName: interaction.user.username ?? interaction.user.globalName ?? "플레이어",
+        channelId: interaction.channelId,
+        sceneId: null,
+        payload: {
+          content: note,
+          attachments: [
+            {
+              id: attachment.id,
+              name: attachment.name ?? null,
+              url: attachment.url,
+              contentType: attachment.contentType ?? null,
+              size: attachment.size ?? null
+            }
+          ]
+        }
+      });
+      if (result.response) {
+        await respondFromHandler(interaction, result.response);
+      } else {
+        await interaction.editReply({ content: "사진이 저장되었습니다. 남은 입력이 있으면 이어서 제출해 주세요." });
+      }
+      return;
+    }
     if (shouldDeferInteraction(interaction)) {
       if (interaction.isButton()) {
         await interaction.deferUpdate();
@@ -258,7 +304,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply({ content: message });
     } else {
-      await interaction.reply({ content: message, ephemeral: true });
+      await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
     }
   }
 });

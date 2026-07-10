@@ -337,11 +337,38 @@ function normalizeSceneInputTypes(inputType) {
   if (typeof inputType !== "string") {
     return ["TEXT"];
   }
-  const types = inputType
+  const raw = inputType.trim().toUpperCase();
+  if (!raw) {
+    return ["TEXT"];
+  }
+  if (raw === "TEXT_OR_PHOTO" || raw === "PHOTO_OR_TEXT") {
+    return ["TEXT", "PHOTO"];
+  }
+  if (raw.includes("_OR_")) {
+    return raw
+      .split(/_OR_/)
+      .map((value) => value.trim().toUpperCase())
+      .filter(Boolean);
+  }
+  const types = raw
     .split(/[+,]/)
     .map((value) => value.trim().toUpperCase())
     .filter(Boolean);
   return types.length > 0 ? types : ["TEXT"];
+}
+
+function normalizeSceneInputRelation(inputType, inputRelation) {
+  const relation = typeof inputRelation === "string" ? inputRelation.trim().toUpperCase() : "";
+  if (relation === "ANY") {
+    return "ANY";
+  }
+  if (typeof inputType === "string") {
+    const raw = inputType.trim().toUpperCase();
+    if (raw === "TEXT_OR_PHOTO" || raw === "PHOTO_OR_TEXT" || raw.includes("_OR_")) {
+      return "ANY";
+    }
+  }
+  return "ALL";
 }
 
 function normalizeSceneChoiceOptions(options) {
@@ -403,16 +430,31 @@ function getCurrentExperienceBeat(state) {
                               : "함께 움직여보세요.",
     allowedNextStageIds: []
   };
-  const beat = stage ? buildStoryBeatForExperience(experience, stage) : null;
+  const completedMissionIds = [
+    ...(state.completedMissionIds ?? []),
+    ...(state.results ?? [])
+      .map((result) => {
+        const storyBeatId = typeof result.storyBeatId === "string" ? result.storyBeatId : "";
+        const missionIdFromBeat = storyBeatId.match(/mission-[a-z0-9-]+$/i)?.[0] ?? null;
+        return result.payload?.mission_id ?? missionIdFromBeat;
+      })
+      .filter(Boolean)
+  ];
+  const beat = stage ? buildStoryBeatForExperience(experience, stage, { completedMissionIds }) : null;
   return beat ? { ...beat, flow, stage } : null;
 }
 
 function getSceneInputDefinition(beat) {
-  const inputTypes = normalizeSceneInputTypes(beat?.mission?.input_type);
+  const inputTypes = normalizeSceneInputTypes(beat?.mission?.input_types ?? beat?.mission?.input_type);
   const choiceOptions = normalizeSceneChoiceOptions(beat?.mission?.input_options);
   return {
     inputTypes,
-    choiceOptions
+    inputRelation: normalizeSceneInputRelation(beat?.mission?.input_type, beat?.mission?.input_relation),
+    choiceOptions,
+    photoDeliveryMode:
+      typeof beat?.mission?.photo_delivery_mode === "string" && beat.mission.photo_delivery_mode.trim()
+        ? beat.mission.photo_delivery_mode.trim().toUpperCase()
+        : "THREAD"
   };
 }
 
@@ -448,22 +490,46 @@ function setSceneInputState(state, sceneInput) {
   });
 }
 
-function isSceneInputSatisfied(sceneInput, inputTypes) {
+function isInputTypeSatisfied(sceneInput, type) {
+  if (type === "TEXT") {
+    return sceneInput.textSubmitted || sceneInput.submittedTypes.includes(type);
+  }
+  if (type === "PHOTO") {
+    return sceneInput.photoSubmitted || sceneInput.submittedTypes.includes(type);
+  }
+  if (type === "CHOICE") {
+    return Boolean(sceneInput.selectedChoice) || sceneInput.submittedTypes.includes(type);
+  }
+  return sceneInput.submittedTypes.includes(type);
+}
+
+function isSceneInputSatisfied(sceneInput, inputTypes, inputRelation = "ALL") {
+  if (inputRelation === "ANY") {
+    return inputTypes.some((type) => isInputTypeSatisfied(sceneInput, type));
+  }
   if (inputTypes.includes("CHOICE") && !sceneInput.selectedChoice) {
     return false;
   }
-  return inputTypes.every((type) => {
-    if (type === "TEXT") {
-      return sceneInput.textSubmitted || sceneInput.submittedTypes.includes(type);
+  return inputTypes.every((type) => isInputTypeSatisfied(sceneInput, type));
+}
+
+function buildScenePhotoUploadState(state, mode, author) {
+  return withUi(state, {
+    photoUpload: {
+      mode,
+      sceneId: state.currentSceneId ?? null,
+      requestedBy: author.id,
+      requestedByName: author.name,
+      status: "requested",
+      channelId: state.ui?.photoUpload?.channelId ?? null,
+      threadId: state.ui?.photoUpload?.threadId ?? null,
+      updatedAt: new Date().toISOString()
     }
-    if (type === "PHOTO") {
-      return sceneInput.photoSubmitted || sceneInput.submittedTypes.includes(type);
-    }
-    if (type === "CHOICE") {
-      return Boolean(sceneInput.selectedChoice) || sceneInput.submittedTypes.includes(type);
-    }
-    return sceneInput.submittedTypes.includes(type);
   });
+}
+
+function hasPendingPhotoUpload(state) {
+  return Boolean(state.ui?.photoUpload?.status === "requested" || state.ui?.photoUpload?.status === "open");
 }
 
 function renderSceneContent(state) {
@@ -484,8 +550,8 @@ function renderSceneContent(state) {
     return buildLegacyStatusContent(state);
   }
   const sceneInput = getSceneInputState(state);
-  const { inputTypes } = getSceneInputDefinition(beat);
-  const completed = isSceneInputSatisfied(sceneInput, inputTypes);
+  const { inputTypes, inputRelation } = getSceneInputDefinition(beat);
+  const completed = isSceneInputSatisfied(sceneInput, inputTypes, inputRelation);
   return renderScene({
     title: completed ? "✅ Mission Complete" : "🎬 오늘의 장면",
     prompt: beat.mission.prompt_hint,
@@ -512,8 +578,8 @@ async function renderSceneContentWithAi(state) {
     return buildLegacyStatusContent(state);
   }
   const sceneInput = getSceneInputState(state);
-  const { inputTypes, choiceOptions } = getSceneInputDefinition(beat);
-  const completed = isSceneInputSatisfied(sceneInput, inputTypes);
+  const { inputTypes, choiceOptions, inputRelation } = getSceneInputDefinition(beat);
+  const completed = isSceneInputSatisfied(sceneInput, inputTypes, inputRelation);
   const aiPrompt = await renderScenePromptWithAi({
     missionPrompt: beat.mission.prompt_hint,
     inputTypes,
@@ -545,8 +611,9 @@ function buildSceneButtons(state, disabled = false) {
   }
   const sceneDisabled = disabled || state.phase === "FINISHED" || state.experience?.status === "Ended";
   const sceneInput = getSceneInputState(state);
-  const { inputTypes, choiceOptions } = getSceneInputDefinition(beat);
-  const completed = isSceneInputSatisfied(sceneInput, inputTypes);
+  const { inputTypes, choiceOptions, inputRelation } = getSceneInputDefinition(beat);
+  const completed = isSceneInputSatisfied(sceneInput, inputTypes, inputRelation);
+  const photoUploadPending = hasPendingPhotoUpload(state);
   if (completed) {
     return [];
   }
@@ -582,7 +649,13 @@ function buildSceneButtons(state, disabled = false) {
       buttons.push({ type: 2, style: 1, custom_id: "scene:record", label: "기록하기", disabled: sceneDisabled });
     }
     if (inputType === "PHOTO" && !sceneInput.photoSubmitted) {
-      buttons.push({ type: 2, style: 2, custom_id: "scene:upload-photo", label: "사진 올리기", disabled: sceneDisabled });
+      buttons.push({
+        type: 2,
+        style: 2,
+        custom_id: "scene:upload-photo",
+        label: photoUploadPending ? "사진 업로드 준비됨" : "사진 올리기",
+        disabled: sceneDisabled || photoUploadPending
+      });
     }
   }
 
@@ -958,6 +1031,7 @@ function buildSceneCompletionState(state, submission, recordedEventId) {
   const completedResult = createResult(submission.beat.id, "MissionComplete", {
     scene_id: state.currentSceneId ?? null,
     experience_id: state.experience?.id ?? null,
+    mission_id: submission.beat.mission?.id ?? null,
     input_types: submission.inputTypes,
     input_type: submission.inputType,
     choice: submission.nextSceneInput?.selectedChoice ?? null,
@@ -969,6 +1043,10 @@ function buildSceneCompletionState(state, submission, recordedEventId) {
     pushResult(
       {
         ...state,
+        completedMissionIds:
+          submission.beat.mission?.id && !(state.completedMissionIds ?? []).includes(submission.beat.mission.id)
+            ? [...(state.completedMissionIds ?? []), submission.beat.mission.id]
+            : (state.completedMissionIds ?? []),
         experience: nextExperience
       },
       completedResult
@@ -999,7 +1077,8 @@ function buildSceneCompletionState(state, submission, recordedEventId) {
   return {
     ...withUi(completedState, {
       sceneInput: null,
-      sceneRetryPending: false
+      sceneRetryPending: false,
+      photoUpload: null
     }),
     completedResult
   };
@@ -1088,8 +1167,8 @@ function buildRetrySceneSubmission(state) {
     return null;
   }
   const sceneInput = getSceneInputState(state);
-  const { inputTypes } = getSceneInputDefinition(beat);
-  if (!isSceneInputSatisfied(sceneInput, inputTypes)) {
+  const { inputTypes, inputRelation } = getSceneInputDefinition(beat);
+  if (!isSceneInputSatisfied(sceneInput, inputTypes, inputRelation)) {
     return null;
   }
   return {
@@ -1127,8 +1206,8 @@ function submitSceneInput(state, interaction, inputType, payload) {
   if (!beat) {
     return { state: updated, completed: false };
   }
-  const { inputTypes } = getSceneInputDefinition(beat);
-  if (!isSceneInputSatisfied(nextSceneInput, inputTypes)) {
+  const { inputTypes, inputRelation } = getSceneInputDefinition(beat);
+  if (!isSceneInputSatisfied(nextSceneInput, inputTypes, inputRelation)) {
     return { state: updated, completed: false, beat, inputTypes, nextSceneInput };
   }
   return {
@@ -1459,22 +1538,23 @@ export async function handleDiscordInteraction(interaction) {
       return response;
     }
     if (customId === "scene:upload-photo") {
-      const submission = submitSceneInput(sessionState, interaction, "PHOTO", {
-        player_id: author.id,
-        player_name: author.name
-      });
-      const nextState = prepareSession(submission.state, interaction);
-      if (submission.completed) {
-        const attempted = await attemptSceneCompletion(nextState, submission);
-        if (attempted.completed) {
-          const published = prepareSession(persistSceneResponse(attempted.state, interaction, attempted.response), interaction);
-          await saveUpdatedSession(interaction, published);
-        } else {
-          await saveUpdatedSession(interaction, prepareSession(attempted.state, interaction));
-        }
-        return attempted.response;
-      }
+      const beat = getCurrentExperienceBeat(sessionState);
+      const mode = getSceneInputDefinition(beat).photoDeliveryMode;
+      const nextState = prepareSession(buildScenePhotoUploadState(sessionState, mode, author), interaction);
       const response = await updateResponse(nextState);
+      response.meta = {
+        ...(response.meta ?? {}),
+        photoUpload: {
+          mode,
+          sceneId: nextState.currentSceneId ?? null,
+          parentChannelId: interaction.channel_id,
+          requestedBy: author.id
+        }
+      };
+      response.data = {
+        ...(response.data ?? {}),
+        content: `${response.data?.content ?? ""}\n\n사진을 올리려면 /upload-photo 명령으로 파일을 첨부하세요.`.trim()
+      };
       await saveUpdatedSession(interaction, nextState);
       return response;
     }
@@ -1570,13 +1650,18 @@ export async function handleDiscordInteraction(interaction) {
         text: values.answer ?? values.text ?? ""
       });
       const nextState = prepareSession(submission.state, interaction);
-      const response = submission.completed ? await panelResponse(nextState) : await updateResponse(nextState);
       if (submission.completed) {
-        const published = prepareSession(persistSceneResponse(nextState, interaction, response), interaction);
-        await saveUpdatedSession(interaction, published);
-      } else {
-        await saveUpdatedSession(interaction, nextState);
+        const attempted = await attemptSceneCompletion(nextState, submission);
+        if (attempted.completed) {
+          const published = prepareSession(persistSceneResponse(attempted.state, interaction, attempted.response), interaction);
+          await saveUpdatedSession(interaction, published);
+        } else {
+          await saveUpdatedSession(interaction, prepareSession(attempted.state, interaction));
+        }
+        return attempted.response;
       }
+      const response = await updateResponse(nextState);
+      await saveUpdatedSession(interaction, nextState);
       return response;
     }
     const nextState = prepareSession(
@@ -1598,49 +1683,126 @@ export async function handleDiscordInteraction(interaction) {
   return ephemeralMessage("지원하지 않는 interaction 입니다.");
 }
 
+function buildObservationEventType(observation) {
+  const hasAttachments = Array.isArray(observation.payload?.attachments) && observation.payload.attachments.length > 0;
+  if (hasAttachments) {
+    return "PlayerUploadedPhoto";
+  }
+  if (observation.type === "thread") {
+    return "SceneThreadMessageCreated";
+  }
+  if (observation.type === "dm") {
+    return "SecretInputReceived";
+  }
+  if (observation.type === "reaction") {
+    return "PlayerReacted";
+  }
+  if (observation.type === "voice") {
+    return "PlayerSubmittedVoice";
+  }
+  return "PlayerSubmittedText";
+}
+
 export async function handleDiscordObservation(sessionKey, observation) {
   const session = await loadSession(sessionKey);
   const state = session?.state ?? resetGame();
-  const eventType =
-    observation.type === "thread"
-      ? "SceneThreadMessageCreated"
-      : observation.type === "dm"
-        ? "SecretInputReceived"
-        : observation.type === "reaction"
-          ? "PlayerReacted"
-          : observation.type === "voice"
-            ? "PlayerSubmittedVoice"
-            : "PlayerSubmittedText";
-  const event = createEvent(eventType, observation.sourceId, observation.payload);
-  const nextState = prepareSession(
-    {
-      ...state,
-      events: [...(state.events ?? []), event],
-      storyMemories: [
-        ...(state.storyMemories ?? []),
-        {
-          id: `memory-${(state.storyMemories?.length ?? 0) + 1}`,
-          sourceEventIds: [event.id],
-          sourceSceneId: observation.sceneId ?? state.currentSceneId ?? null,
-          summary: summarizeMemoryCandidate(event),
-          tags: ["callback"],
-          callbackWeight: 1
-        }
-      ]
-    },
-    {
-      id: event.id,
+  const hasPhotoAttachments = Array.isArray(observation.payload?.attachments) && observation.payload.attachments.length > 0;
+  const observationId = observation.id ?? `${Date.now()}`;
+  const channelId = session?.channelId ?? observation.channelId ?? sessionKey.split(":").at(-1) ?? "unknown";
+  let nextState;
+  let response = null;
+  let completed = false;
+  let event;
+
+  if (hasPhotoAttachments) {
+    const submission = submitSceneInput(state, { id: observation.id ?? `${Date.now()}`, channel_id: session?.channelId ?? observation.channelId ?? "unknown" }, "PHOTO", {
+      player_id: observation.sourceId,
+      player_name: observation.sourceName ?? observation.sourceId ?? "플레이어",
+      text: typeof observation.payload?.content === "string" ? observation.payload.content : "",
+      attachments: observation.payload.attachments
+    });
+    const submittedState = prepareSession(submission.state, {
+      id: observationId,
       type: 2,
       token: "",
-      channel_id: session?.channelId ?? sessionKey.split(":").at(-1) ?? "unknown"
+      channel_id: session?.channelId ?? observation.channelId ?? "unknown"
+    });
+    event = submittedState.events?.at(-1) ?? null;
+    if (submission.completed) {
+      const attempted = await attemptSceneCompletion(submittedState, submission);
+      nextState = prepareSession(attempted.state, {
+        id: observationId,
+        type: 2,
+        token: "",
+        channel_id: session?.channelId ?? observation.channelId ?? "unknown"
+      });
+      response = attempted.response;
+      completed = attempted.completed;
+    } else {
+      nextState = submittedState;
     }
-  );
+  } else {
+    const eventType = buildObservationEventType(observation);
+    event = createEvent(eventType, observation.sourceId, observation.payload);
+    nextState = prepareSession(
+      {
+        ...state,
+        events: [...(state.events ?? []), event],
+        storyMemories: [
+          ...(state.storyMemories ?? []),
+          {
+            id: `memory-${(state.storyMemories?.length ?? 0) + 1}`,
+            sourceEventIds: [event.id],
+            sourceSceneId: observation.sceneId ?? state.currentSceneId ?? null,
+            summary: summarizeMemoryCandidate(event),
+            tags: ["callback"],
+            callbackWeight: 1
+          }
+        ]
+      },
+      {
+        id: event.id,
+        type: 2,
+        token: "",
+        channel_id: channelId
+      }
+    );
+  }
+
+  const publishedState = response
+    ? prepareSession(
+        persistSceneResponse(
+          nextState,
+          {
+            guild_id: null,
+            channel_id: channelId
+          },
+          response,
+          event ? [event.id] : [],
+          true
+        ),
+        {
+          id: observationId,
+          type: 2,
+          token: "",
+          channel_id: channelId
+        }
+      )
+    : nextState;
+
   await saveSession({
-    ...(session ?? buildSessionRecord(null, nextState.currentSceneId ?? sessionKey.split(":").at(-1) ?? "unknown", nextState)),
-    state: nextState,
+    ...(session ?? buildSessionRecord(null, publishedState.currentSceneId ?? channelId, publishedState)),
+    state: publishedState,
     updatedAt: new Date().toISOString()
   });
-  return nextState;
+
+  return {
+    state: publishedState,
+    response,
+    completed,
+    event,
+    sessionKey
+  };
 }
 
 function ed25519PublicKeyFromHex(hexKey) {

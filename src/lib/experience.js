@@ -131,20 +131,50 @@ function buildMissionInputUi(mission) {
   };
 }
 
+function parseMissionInputType(inputType) {
+  const raw = typeof inputType === "string" ? inputType.trim().toUpperCase() : "";
+  if (!raw) {
+    return { inputTypes: ["TEXT"], inputRelation: "ALL" };
+  }
+  if (raw === "TEXT_OR_PHOTO" || raw === "PHOTO_OR_TEXT") {
+    return { inputTypes: ["TEXT", "PHOTO"], inputRelation: "ANY" };
+  }
+  if (raw.includes("_OR_")) {
+    return {
+      inputTypes: raw.split(/_OR_/).map((value) => value.trim()).filter(Boolean),
+      inputRelation: "ANY"
+    };
+  }
+  return {
+    inputTypes: raw
+      .split(/[+,]/)
+      .map((value) => value.trim())
+      .filter(Boolean),
+    inputRelation: "ALL"
+  };
+}
+
 function missionToBeat(stage, mission) {
   const inputType = typeof mission.inputType === "string" && mission.inputType.trim() ? mission.inputType.trim() : "TEXT";
+  const { inputTypes, inputRelation } = parseMissionInputType(inputType);
   const inputUi = buildMissionInputUi(mission);
   return {
-    id: `beat-${mission.id}`,
+    id: `beat-${stage.id}-${mission.id}`,
     stageId: stage.id,
     lifecycle: "Prepared",
     mission: {
+      id: mission.id,
       title: inputUi.title,
       description: inputUi.description,
       placeholder: inputUi.placeholder,
+      photo_delivery_mode: typeof mission.photoDeliveryMode === "string" && mission.photoDeliveryMode.trim()
+        ? mission.photoDeliveryMode.trim().toUpperCase()
+        : null,
       interaction_pattern: mission.interactionPattern ?? "Talk",
       constraint: mission.constraint ?? (mission.requiredTags.join(", ") || "none"),
       input_type: inputType,
+      input_types: inputTypes,
+      input_relation: inputRelation,
       input_options: Array.isArray(mission.choiceOptions) ? mission.choiceOptions : [],
       prompt_hint: stagePurposeToPrompt(stage, mission)
     },
@@ -258,9 +288,29 @@ export function endExperience(experience) {
   };
 }
 
-export function buildStoryBeatForExperience(experience, stage) {
-  const candidateMission =
-    missionPool.find((mission) => mission.phase === "early" && mission.safetyFlags.includes("safe")) ?? missionPool[0];
+function phaseForStage(stageName) {
+  const normalized = String(stageName ?? "").toLowerCase();
+  if (["exploration", "conversation", "question", "awkward", "unexpected"].includes(normalized)) {
+    return "early";
+  }
+  if (["discovery", "cooperation", "clue", "chaos", "variation"].includes(normalized)) {
+    return "middle";
+  }
+  return "late";
+}
+
+function pickMissionForStage(stage, completedMissionIds = []) {
+  const completed = new Set(completedMissionIds);
+  const phase = phaseForStage(stage?.name);
+  const safeMissions = missionPool.filter((mission) => mission.safetyFlags.includes("safe") && mission.category !== "emergency");
+  const phaseMissions = safeMissions.filter((mission) => mission.phase === phase && !completed.has(mission.id));
+  const anyMissions = safeMissions.filter((mission) => mission.phase === "any" && !completed.has(mission.id));
+  const reusablePhaseMissions = safeMissions.filter((mission) => mission.phase === phase);
+  return phaseMissions[0] ?? anyMissions[0] ?? reusablePhaseMissions[0] ?? safeMissions[0] ?? missionPool[0];
+}
+
+export function buildStoryBeatForExperience(experience, stage, options = {}) {
+  const candidateMission = pickMissionForStage(stage, options.completedMissionIds ?? []);
   if (!stage || !candidateMission) {
     return null;
   }
@@ -289,7 +339,7 @@ export function chooseNextStage(flow, currentStageId) {
     return null;
   }
   const nextStageId = current.allowedNextStageIds[0];
-  return stages.find((stage) => stage.id === nextStageId) ?? stages[0] ?? null;
+  return stages.find((stage) => stage.id === nextStageId) ?? null;
 }
 
 export function createEvent(type, source, payload = {}) {

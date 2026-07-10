@@ -21,19 +21,44 @@ const CHOICE_HINTS = ["선택하세요", "고르세요", "어느 쪽", "결정�
 function normalizeInputType(inputType) {
   const raw = typeof inputType === "string" ? inputType.trim() : "";
   if (!raw) {
-    return [];
+    return { tokens: [], relation: "ALL" };
   }
   if (raw === "TEXT_OR_PHOTO") {
-    return ["TEXT", "PHOTO"];
+    return { tokens: ["TEXT", "PHOTO"], relation: "ANY" };
   }
-  return raw
-    .split(/[+,_\s]+/)
-    .map((value) => value.trim().toUpperCase())
-    .filter(Boolean);
+  if (raw === "PHOTO_OR_TEXT") {
+    return { tokens: ["PHOTO", "TEXT"], relation: "ANY" };
+  }
+  if (raw.includes("_OR_")) {
+    return {
+      tokens: raw
+        .split(/_OR_/)
+        .map((value) => value.trim().toUpperCase())
+        .filter(Boolean),
+      relation: "ANY"
+    };
+  }
+  return {
+    tokens: raw
+      .split(/[+,_\s]+/)
+      .map((value) => value.trim().toUpperCase())
+      .filter(Boolean),
+    relation: "ALL"
+  };
 }
 
-function joinInputType(tokens) {
-  return tokens.length > 0 ? Array.from(new Set(tokens)).join("+") : "";
+function joinInputType(tokens, relation = "ALL") {
+  const unique = Array.from(new Set(tokens));
+  if (unique.length === 0) {
+    return "";
+  }
+  if (relation === "ANY") {
+    if (unique.length === 2 && unique.includes("TEXT") && unique.includes("PHOTO")) {
+      return "TEXT_OR_PHOTO";
+    }
+    return unique.join("_OR_");
+  }
+  return unique.join("+");
 }
 
 function missionText(mission) {
@@ -71,12 +96,12 @@ function expectedInputTokens(mission) {
     }
   }
 
-  if (signals.choice && (expected.size === 0 || actual.includes("CHOICE") || Array.isArray(mission.choiceOptions))) {
+  if (signals.choice && (expected.size === 0 || actual.tokens.includes("CHOICE") || Array.isArray(mission.choiceOptions))) {
     expected.add("CHOICE");
   }
 
   if (expected.size === 0) {
-    actual.forEach((token) => expected.add(token));
+    actual.tokens.forEach((token) => expected.add(token));
   }
 
   return Array.from(expected);
@@ -84,6 +109,11 @@ function expectedInputTokens(mission) {
 
 function defaultPlaceholder(mission) {
   return mission.inputUi?.placeholder ?? "답변을 입력하세요.";
+}
+
+function normalizePhotoDeliveryMode(value) {
+  const raw = typeof value === "string" ? value.trim().toUpperCase() : "";
+  return ["THREAD", "DM"].includes(raw) ? raw : "";
 }
 
 function ensureInputUi(mission) {
@@ -99,7 +129,9 @@ function ensureInputUi(mission) {
 }
 
 export function auditMission(mission) {
-  const actualTokens = normalizeInputType(mission.inputType);
+  const actualInput = normalizeInputType(mission.inputType);
+  const actualTokens = actualInput.tokens;
+  const actualRelation = actualInput.relation;
   const expectedTokens = expectedInputTokens(mission);
   const signals = inferSignals(mission);
   const inputUi = ensureInputUi(mission);
@@ -116,6 +148,12 @@ export function auditMission(mission) {
   }
   if (expectedTokens.includes("TEXT") && !inputUi.placeholder?.trim()) {
     issues.push("Placeholder missing");
+  }
+  if (actualTokens.includes("PHOTO")) {
+    const mode = normalizePhotoDeliveryMode(mission.photoDeliveryMode);
+    if (!mode) {
+      issues.push("Photo delivery mode missing");
+    }
   }
   if (signals.text && !actualTokens.includes("TEXT")) {
     issues.push("Prompt implies TEXT but inputType omits TEXT");
@@ -137,9 +175,10 @@ export function auditMission(mission) {
     id: mission.id,
     title: mission.title ?? "",
     description: mission.description ?? "",
-    actualInputType: joinInputType(actualTokens),
-    expectedInputType: joinInputType(expectedTokens),
+    actualInputType: joinInputType(actualTokens, actualRelation),
+    expectedInputType: joinInputType(expectedTokens, signals.combo || (signals.text && signals.photo) ? "ANY" : actualRelation),
     choiceOptions: Array.isArray(mission.choiceOptions) ? mission.choiceOptions : [],
+    photoDeliveryMode: normalizePhotoDeliveryMode(mission.photoDeliveryMode),
     inputUi,
     issues,
     valid: issues.length === 0
@@ -151,13 +190,16 @@ export function autoFixMission(mission) {
   const next = structuredClone(mission);
   next.inputUi = ensureInputUi(mission);
 
-  if (!next.inputUi.placeholder?.trim() && normalizeInputType(next.inputType).includes("TEXT")) {
+  if (!next.inputUi.placeholder?.trim() && normalizeInputType(next.inputType).tokens.includes("TEXT")) {
     next.inputUi.placeholder = "답변을 입력하세요.";
   }
 
   const expected = normalizeInputType(audit.expectedInputType);
-  if (expected.length > 0) {
-    next.inputType = joinInputType(expected);
+  if (expected.tokens.length > 0) {
+    next.inputType = joinInputType(expected.tokens, expected.relation);
+  }
+  if (expected.tokens.includes("PHOTO") && !normalizePhotoDeliveryMode(next.photoDeliveryMode)) {
+    next.photoDeliveryMode = "THREAD";
   }
 
   return {
@@ -204,6 +246,9 @@ export function renderMissionQaReport(auditResult) {
     lines.push(`- Input: ${report.actualInputType || "(missing)"}`);
     lines.push(`- Expected: ${report.expectedInputType || "(missing)"}`);
     lines.push(`- Result: ${report.valid ? "PASS" : "INVALID"}`);
+    if (report.photoDeliveryMode) {
+      lines.push(`- Photo Delivery Mode: ${report.photoDeliveryMode}`);
+    }
     if (report.choiceOptions.length > 0) {
       lines.push(`- Choice Options: ${report.choiceOptions.join(", ")}`);
     }

@@ -462,7 +462,7 @@ describe("discord reality mission engine", () => {
       }))
     );
 
-    const { handleDiscordInteraction } = await import("../lib/discord-interactions.js");
+    const { handleDiscordInteraction, handleDiscordObservation } = await import("../lib/discord-interactions.js");
     const { loadSession } = await import("../lib/session-store.js");
 
     await handleDiscordInteraction({
@@ -500,29 +500,8 @@ describe("discord reality mission engine", () => {
     expect(startResponse.type).toBe(4);
     expect(startResponse.data?.content).toContain("🎬 오늘의 장면");
 
-    const textResponse = await handleDiscordInteraction({
-      id: "interaction-auto-text",
-      type: 5,
-      token: "token",
-      guild_id: "guild-auto",
-      channel_id: "channel-auto",
-      data: {
-        custom_id: "scene:record-modal:channel-auto",
-        components: [
-          {
-            components: [{ custom_id: "answer", value: "오늘 분위기를 짧게 적습니다." }]
-          }
-        ]
-      },
-      member: {
-        user: makeUser("user-host", "호스트")
-      }
-    });
-
-    expect(textResponse.type).toBe(7);
-
-    const photoResponse = await handleDiscordInteraction({
-      id: "interaction-auto-photo",
+    const photoButtonResponse = await handleDiscordInteraction({
+      id: "interaction-auto-photo-button",
       type: 3,
       token: "token",
       guild_id: "guild-auto",
@@ -535,13 +514,37 @@ describe("discord reality mission engine", () => {
       }
     });
 
-    expect(photoResponse.type).toBe(7);
-    expect(photoResponse.data?.content).toContain("🎬 오늘의 장면");
+    expect(photoButtonResponse.type).toBe(7);
+    expect(photoButtonResponse.data?.content).toContain("/upload-photo");
+
+    const requestedSession = await loadSession("guild-auto:channel-auto");
+    expect(requestedSession?.state.ui?.photoUpload?.status).toBe("requested");
+
+    const photoObservation = await handleDiscordObservation("guild-auto:channel-auto", {
+      type: "photo",
+      sourceId: "user-host",
+      sourceName: "호스트",
+      channelId: "channel-auto",
+      payload: {
+        content: "",
+        attachments: [
+          {
+            id: "attachment-1",
+            url: "https://example.com/photo.png",
+            name: "photo.png"
+          }
+        ]
+      }
+    });
+
+    expect(photoObservation.completed).toBe(true);
+    expect(photoObservation.response?.type).toBe(7);
 
     const session = await loadSession("guild-auto:channel-auto");
     expect(session?.state.scenes?.length).toBeGreaterThanOrEqual(2);
     expect(session?.state.currentSceneId).toBe(session?.state.scenes?.at(-1)?.id);
     expect(session?.state.ui?.sceneInput).toBeFalsy();
+    expect(session?.state.ui?.photoUpload).toBeNull();
     expect(session?.state.results?.length).toBeGreaterThan(0);
     expect(session?.state.results?.at(-1)?.type).toBe("MissionComplete");
     expect(session?.state.events?.some((event) => event.type === "ResultCreated")).toBe(true);

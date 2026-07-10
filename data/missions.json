@@ -23,7 +23,8 @@
     "budgetPerPerson": 0,
     "phase": "early",
     "category": "emotional",
-    "inputType": "TEXT+PHOTO",
+    "inputType": "TEXT_OR_PHOTO",
+    "photoDeliveryMode": "THREAD",
     "foreshadowTags": [
       "color",
       "mood",
@@ -127,6 +128,7 @@
     "phase": "middle",
     "category": "emotional",
     "inputType": "PHOTO",
+    "photoDeliveryMode": "THREAD",
     "foreshadowTags": [
       "object",
       "name",

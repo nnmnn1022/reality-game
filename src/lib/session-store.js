@@ -28,6 +28,11 @@ export async function loadSession(sessionKey) {
   return store.sessions[sessionKey] ?? null;
 }
 
+export async function listSessions() {
+  const store = await readStore();
+  return Object.values(store.sessions);
+}
+
 export async function saveSession(session) {
   const store = await readStore();
   store.sessions[session.sessionKey] = session;
