@@ -7,6 +7,8 @@
     "dev": "node bot.js",
     "start": "node bot.js",
     "bot": "node bot.js",
+    "qa:missions": "node scripts/mission-qa.mjs",
+    "qa:missions:fix": "node scripts/mission-qa.mjs --fix",
     "lint": "eslint .",
     "test": "vitest run"
   },

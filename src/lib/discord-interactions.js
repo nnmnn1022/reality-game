@@ -2,9 +2,11 @@ import crypto from "node:crypto";
 import {
   buildCoverage,
   buildStoryBeatForExperience,
+  advanceExperienceProgress,
   chooseNextStage,
   createEvent,
   createExperience,
+  createResult,
   endExperience,
   getFlowById,
   listFlows,
@@ -923,6 +925,13 @@ function recordSceneScene(state, interaction, kind, payload) {
   return pushMemory(next, summary, [event.id]);
 }
 
+function pushResult(state, result) {
+  return {
+    ...state,
+    results: [...(state.results ?? []), result]
+  };
+}
+
 function submitSceneInput(state, interaction, inputType, payload) {
   const eventType =
     inputType === "PHOTO" ? "PlayerUploadedPhoto" : inputType === "CHOICE" ? "PlayerSelectedChoice" : "PlayerSubmittedText";
@@ -950,15 +959,44 @@ function submitSceneInput(state, interaction, inputType, payload) {
   if (!isSceneInputSatisfied(nextSceneInput, inputTypes)) {
     return { state: updated, completed: false };
   }
+  const completedResult = createResult(beat.id, "MissionComplete", {
+    scene_id: updated.currentSceneId ?? null,
+    experience_id: updated.experience?.id ?? null,
+    input_types: inputTypes,
+    input_type: inputType,
+    choice: nextSceneInput.selectedChoice ?? null,
+    text: typeof payload.text === "string" ? payload.text : null,
+    photo_submitted: inputType === "PHOTO"
+  });
+  const nextExperience = advanceExperienceProgress(updated.experience, beat.stage?.name ?? null);
   const completedState = appendEvents(
-    updated,
+    pushResult(
+      {
+        ...updated,
+        experience: nextExperience
+      },
+      completedResult
+    ),
     [
       createEvent("MissionCompleted", "discord-bot", {
         scene_id: updated.currentSceneId ?? null,
         experience_id: updated.experience?.id ?? null,
         input_types: inputTypes,
         choice: nextSceneInput.selectedChoice ?? null,
+        result_id: completedResult.id,
         event_ids: [recorded.events?.at(-1)?.id].filter(Boolean)
+      }),
+      createEvent("ResultCreated", "discord-bot", {
+        result_id: completedResult.id,
+        story_beat_id: completedResult.storyBeatId,
+        scene_id: updated.currentSceneId ?? null,
+        experience_id: updated.experience?.id ?? null
+      }),
+      createEvent("ExperienceProgressUpdated", "discord-bot", {
+        experience_id: updated.experience?.id ?? null,
+        completed_stage: beat.stage?.name ?? null,
+        achieved: nextExperience?.coverage?.achieved ?? [],
+        pending: nextExperience?.coverage?.pending ?? []
       })
     ]
   );

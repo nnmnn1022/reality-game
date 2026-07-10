@@ -324,6 +324,21 @@ export function createResult(storyBeatId, type, payload) {
   };
 }
 
+export function advanceExperienceProgress(experience, completedStageName) {
+  if (!experience) {
+    return experience;
+  }
+  const achieved = Array.from(new Set([...(experience.coverage?.achieved ?? []), completedStageName].filter(Boolean)));
+  const pending = (experience.coverage?.pending ?? []).filter((item) => item !== completedStageName);
+  return {
+    ...experience,
+    coverage: {
+      achieved,
+      pending
+    }
+  };
+}
+
 export function createStoryMemory(params) {
   return {
     id: newId("memory"),

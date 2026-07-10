@@ -8,6 +8,7 @@ export const initialGameState = {
   environmentTags: [],
   completedMissionIds: [],
   foreshadows: [],
+  results: [],
   fatigue: 0,
   mood: "calm",
   currentMissionId: null,
@@ -273,6 +274,7 @@ export function deserializeGameState(raw) {
       players: Array.isArray(parsed.players) ? parsed.players : [],
       completedMissionIds: Array.isArray(parsed.completedMissionIds) ? parsed.completedMissionIds : [],
       foreshadows: Array.isArray(parsed.foreshadows) ? parsed.foreshadows : [],
+      results: Array.isArray(parsed.results) ? parsed.results : [],
       processedInteractionIds: Array.isArray(parsed.processedInteractionIds) ? parsed.processedInteractionIds : []
     };
   } catch {

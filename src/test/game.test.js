@@ -469,5 +469,10 @@ describe("discord reality mission engine", () => {
     expect(session?.state.scenes?.length).toBeGreaterThanOrEqual(2);
     expect(session?.state.currentSceneId).toBe(session?.state.scenes?.at(-1)?.id);
     expect(session?.state.ui?.sceneInput).toBeFalsy();
+    expect(session?.state.results?.length).toBeGreaterThan(0);
+    expect(session?.state.results?.at(-1)?.type).toBe("MissionComplete");
+    expect(session?.state.events?.some((event) => event.type === "ResultCreated")).toBe(true);
+    expect(session?.state.events?.some((event) => event.type === "ExperienceProgressUpdated")).toBe(true);
+    expect(session?.state.experience?.coverage?.achieved).toContain("unexpected");
   });
 });

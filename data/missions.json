@@ -8,16 +8,30 @@
       "description": "오늘 팀 분위기와 가장 닮은 색을 한 단어 또는 짧은 문장으로 적어보세요.",
       "placeholder": "예) 까만색"
     },
-    "requiredTags": ["walkable"],
-    "optionalTags": ["street", "park", "indoor"],
-    "blockedTags": ["quiet-only"],
+    "requiredTags": [
+      "walkable"
+    ],
+    "optionalTags": [
+      "street",
+      "park",
+      "indoor"
+    ],
+    "blockedTags": [
+      "quiet-only"
+    ],
     "durationMinutes": 8,
     "budgetPerPerson": 0,
     "phase": "early",
     "category": "emotional",
     "inputType": "TEXT+PHOTO",
-    "foreshadowTags": ["color", "mood", "choice"],
-    "safetyFlags": ["safe"]
+    "foreshadowTags": [
+      "color",
+      "mood",
+      "choice"
+    ],
+    "safetyFlags": [
+      "safe"
+    ]
   },
   {
     "id": "mission-receipt-prophecy",
@@ -28,52 +42,99 @@
       "description": "가장 최근 영수증이나 숫자 하나를 오늘의 예언처럼 적어보세요.",
       "placeholder": "예) 135는 오늘의 순서"
     },
-    "requiredTags": ["shop-nearby"],
-    "optionalTags": ["cafe", "market"],
-    "blockedTags": ["no-purchase"],
+    "requiredTags": [
+      "shop-nearby"
+    ],
+    "optionalTags": [
+      "cafe",
+      "market"
+    ],
+    "blockedTags": [
+      "no-purchase"
+    ],
     "durationMinutes": 10,
     "budgetPerPerson": 3000,
     "phase": "middle",
     "category": "variety",
     "inputType": "TEXT",
-    "foreshadowTags": ["receipt", "number", "dialogue"],
-    "safetyFlags": ["safe"]
+    "foreshadowTags": [
+      "receipt",
+      "number",
+      "dialogue"
+    ],
+    "safetyFlags": [
+      "safe"
+    ]
   },
   {
     "id": "mission-tiny-ceremony",
     "title": "작은 의식 만들기",
-    "description": "팀만 알아볼 수 있는 작은 손동작이나 구호를 만들고 다음 미션 전까지 한 번 사용하세요.",
-    "requiredTags": ["group-friendly"],
-    "optionalTags": ["street", "park", "indoor"],
-    "blockedTags": ["silent-zone"],
+    "description": "아래 옵션 중 하나를 골라 팀만 알아볼 수 있는 작은 손동작이나 구호를 만들고 다음 미션 전까지 한 번 사용하세요.",
+    "inputUi": {
+      "title": "아래에서 하나를 골라보세요.",
+      "description": "팀만 알아볼 수 있는 작은 손동작이나 구호를 만들고 다음 미션 전까지 한 번 사용하세요.",
+      "placeholder": "답변을 입력하세요."
+    },
+    "requiredTags": [
+      "group-friendly"
+    ],
+    "optionalTags": [
+      "street",
+      "park",
+      "indoor"
+    ],
+    "blockedTags": [
+      "silent-zone"
+    ],
     "durationMinutes": 7,
     "budgetPerPerson": 0,
     "phase": "early",
     "category": "variety",
     "inputType": "CHOICE",
-    "choiceOptions": ["손동작", "구호", "악수"],
-    "foreshadowTags": ["gesture", "dialogue", "choice"],
-    "safetyFlags": ["safe"]
+    "choiceOptions": [
+      "손동작",
+      "구호",
+      "악수"
+    ],
+    "foreshadowTags": [
+      "gesture",
+      "dialogue",
+      "choice"
+    ],
+    "safetyFlags": [
+      "safe"
+    ]
   },
   {
     "id": "mission-kind-object",
     "title": "친절한 물건",
-    "description": "주변 물건 하나를 골라 오늘 팀을 도와주는 조연이라고 이름 붙이세요.",
+    "description": "주변 물건을 사진으로 찍고, 오늘 팀을 도와주는 조연이라고 이름 붙이세요.",
     "inputUi": {
       "title": "주변 물건에 이름을 붙여보세요.",
-      "description": "주변 물건 하나를 골라 오늘 팀을 도와주는 조연이라고 이름 붙이세요.",
+      "description": "주변 물건을 사진으로 찍고, 오늘 팀을 도와주는 조연이라고 이름 붙이세요.",
       "placeholder": "예) 우산은 오늘의 보호막"
     },
-    "requiredTags": ["indoor"],
-    "optionalTags": ["cafe", "rest"],
+    "requiredTags": [
+      "indoor"
+    ],
+    "optionalTags": [
+      "cafe",
+      "rest"
+    ],
     "blockedTags": [],
     "durationMinutes": 6,
     "budgetPerPerson": 0,
     "phase": "middle",
     "category": "emotional",
-    "inputType": "TEXT+PHOTO",
-    "foreshadowTags": ["object", "name", "mood"],
-    "safetyFlags": ["safe"]
+    "inputType": "PHOTO",
+    "foreshadowTags": [
+      "object",
+      "name",
+      "mood"
+    ],
+    "safetyFlags": [
+      "safe"
+    ]
   },
   {
     "id": "mission-postcard-future",
@@ -84,52 +145,104 @@
       "description": "오늘 끝난 뒤의 우리가 지금의 우리에게 보내는 한 줄 메시지를 남기세요.",
       "placeholder": "예) 오늘의 용기 잊지 말자"
     },
-    "requiredTags": ["rest"],
-    "optionalTags": ["cafe", "park", "indoor"],
+    "requiredTags": [
+      "rest"
+    ],
+    "optionalTags": [
+      "cafe",
+      "park",
+      "indoor"
+    ],
     "blockedTags": [],
     "durationMinutes": 12,
     "budgetPerPerson": 0,
     "phase": "late",
     "category": "emotional",
     "inputType": "TEXT",
-    "foreshadowTags": ["message", "feeling", "ending"],
-    "safetyFlags": ["safe"]
+    "foreshadowTags": [
+      "message",
+      "feeling",
+      "ending"
+    ],
+    "safetyFlags": [
+      "safe"
+    ]
   },
   {
     "id": "mission-breathing-checkpoint",
     "title": "숨 고르기 체크포인트",
-    "description": "각자 지금 피로도를 1부터 5까지 말하고, 가장 낮은 사람의 속도에 맞춰 5분 쉬세요.",
-    "requiredTags": ["rest"],
-    "optionalTags": ["park", "cafe", "indoor"],
+    "description": "각자 지금 피로도를 1부터 5까지 선택하고, 가장 낮은 사람의 속도에 맞춰 5분 쉬세요.",
+    "inputUi": {
+      "title": "피로도를 선택해보세요.",
+      "description": "각자 지금 피로도를 1부터 5까지 선택하고, 가장 낮은 사람의 속도에 맞춰 5분 쉬세요.",
+      "placeholder": "답변을 입력하세요."
+    },
+    "requiredTags": [
+      "rest"
+    ],
+    "optionalTags": [
+      "park",
+      "cafe",
+      "indoor"
+    ],
     "blockedTags": [],
     "durationMinutes": 5,
     "budgetPerPerson": 0,
     "phase": "any",
     "category": "rest",
     "inputType": "CHOICE",
-    "choiceOptions": ["1", "2", "3", "4", "5"],
-    "foreshadowTags": ["fatigue", "care", "mood"],
-    "safetyFlags": ["safe"]
+    "choiceOptions": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5"
+    ],
+    "foreshadowTags": [
+      "fatigue",
+      "care",
+      "mood"
+    ],
+    "safetyFlags": [
+      "safe"
+    ]
   },
   {
     "id": "mission-emergency-safe-story",
     "title": "안전한 이야기 회수",
-    "description": "지금 자리에서 오늘 기억나는 단어 3개를 고르고, 그중 하나를 다음 장면의 암호로 정하세요.",
+    "description": "지금 자리에서 오늘 기억나는 단어 3개를 적고, 그중 하나를 다음 장면의 암호로 고르세요.",
     "inputUi": {
-      "title": "오늘 기억나는 단어를 적어보세요.",
-      "description": "지금 자리에서 오늘 기억나는 단어 3개를 고르고, 그중 하나를 다음 장면의 암호로 정하세요.",
+      "title": "기억나는 단어를 적고 암호를 고르세요.",
+      "description": "지금 자리에서 오늘 기억나는 단어 3개를 적고, 그중 하나를 다음 장면의 암호로 고르세요.",
       "placeholder": "예) 버스, 파란간판, 웃음"
     },
     "requiredTags": [],
-    "optionalTags": ["indoor", "street", "park", "cafe", "rest"],
+    "optionalTags": [
+      "indoor",
+      "street",
+      "park",
+      "cafe",
+      "rest"
+    ],
     "blockedTags": [],
     "durationMinutes": 5,
     "budgetPerPerson": 0,
     "phase": "any",
     "category": "emergency",
     "inputType": "TEXT+CHOICE",
-    "choiceOptions": ["단어 1", "단어 2", "단어 3"],
-    "foreshadowTags": ["word", "choice", "dialogue"],
-    "safetyFlags": ["safe", "emergency"]
+    "choiceOptions": [
+      "단어 1",
+      "단어 2",
+      "단어 3"
+    ],
+    "foreshadowTags": [
+      "word",
+      "choice",
+      "dialogue"
+    ],
+    "safetyFlags": [
+      "safe",
+      "emergency"
+    ]
   }
 ]
