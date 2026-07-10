@@ -135,7 +135,7 @@ function toRawInteraction(interaction) {
       custom_id: interaction.customId
     };
   } else if (interaction.isModalSubmit()) {
-    const knownFields = ["foreshadowText", "mood", "text", "choice", "reflection"];
+    const knownFields = ["foreshadowText", "mood", "answer", "text", "choice", "reflection"];
     const components = knownFields
       .map((customId) => {
         try {

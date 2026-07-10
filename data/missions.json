@@ -3,6 +3,11 @@
     "id": "mission-color-hunt",
     "title": "오늘의 색 찾기",
     "description": "주변에서 오늘 팀 분위기와 가장 닮은 색을 찾고 사진이나 말로 기록하세요.",
+    "inputUi": {
+      "title": "오늘 팀 분위기와 가장 닮은 색은?",
+      "description": "오늘 팀 분위기와 가장 닮은 색을 한 단어 또는 짧은 문장으로 적어보세요.",
+      "placeholder": "예) 까만색"
+    },
     "requiredTags": ["walkable"],
     "optionalTags": ["street", "park", "indoor"],
     "blockedTags": ["quiet-only"],
@@ -18,6 +23,11 @@
     "id": "mission-receipt-prophecy",
     "title": "영수증 예언",
     "description": "가장 최근 영수증이나 숫자 하나를 골라 오늘의 예언처럼 해석해 보세요.",
+    "inputUi": {
+      "title": "영수증 예언을 적어보세요.",
+      "description": "가장 최근 영수증이나 숫자 하나를 오늘의 예언처럼 적어보세요.",
+      "placeholder": "예) 135는 오늘의 순서"
+    },
     "requiredTags": ["shop-nearby"],
     "optionalTags": ["cafe", "market"],
     "blockedTags": ["no-purchase"],
@@ -49,6 +59,11 @@
     "id": "mission-kind-object",
     "title": "친절한 물건",
     "description": "주변 물건 하나를 골라 오늘 팀을 도와주는 조연이라고 이름 붙이세요.",
+    "inputUi": {
+      "title": "주변 물건에 이름을 붙여보세요.",
+      "description": "주변 물건 하나를 골라 오늘 팀을 도와주는 조연이라고 이름 붙이세요.",
+      "placeholder": "예) 우산은 오늘의 보호막"
+    },
     "requiredTags": ["indoor"],
     "optionalTags": ["cafe", "rest"],
     "blockedTags": [],
@@ -64,6 +79,11 @@
     "id": "mission-postcard-future",
     "title": "미래에서 온 한 줄",
     "description": "오늘 끝난 뒤의 우리가 지금의 우리에게 보내는 한 줄 메시지를 남기세요.",
+    "inputUi": {
+      "title": "미래의 우리에게 한 줄을 남겨보세요.",
+      "description": "오늘 끝난 뒤의 우리가 지금의 우리에게 보내는 한 줄 메시지를 남기세요.",
+      "placeholder": "예) 오늘의 용기 잊지 말자"
+    },
     "requiredTags": ["rest"],
     "optionalTags": ["cafe", "park", "indoor"],
     "blockedTags": [],
@@ -95,6 +115,11 @@
     "id": "mission-emergency-safe-story",
     "title": "안전한 이야기 회수",
     "description": "지금 자리에서 오늘 기억나는 단어 3개를 고르고, 그중 하나를 다음 장면의 암호로 정하세요.",
+    "inputUi": {
+      "title": "오늘 기억나는 단어를 적어보세요.",
+      "description": "지금 자리에서 오늘 기억나는 단어 3개를 고르고, 그중 하나를 다음 장면의 암호로 정하세요.",
+      "placeholder": "예) 버스, 파란간판, 웃음"
+    },
     "requiredTags": [],
     "optionalTags": ["indoor", "street", "park", "cafe", "rest"],
     "blockedTags": [],

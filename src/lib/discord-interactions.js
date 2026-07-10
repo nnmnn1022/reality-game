@@ -64,7 +64,7 @@ function parseStartOptions(interaction) {
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
-  const flowId = (options.flow ?? options.flow_id ?? options.flowName ?? "").trim() || "adventure";
+  const flowId = (options.flow ?? options.flow_id ?? options.flowName ?? "").trim();
   return { playerNames, environmentTags, flowId };
 }
 
@@ -193,8 +193,7 @@ function createExperienceLobbyState(author) {
   const baseState = resetGame();
   const initialPlayers = [{ id: author.id, name: author.name }];
   const created = createExperience({
-    participantNames: initialPlayers.map((player) => player.name),
-    flowId: "adventure"
+    participantNames: initialPlayers.map((player) => player.name)
   });
   return withUi(
     {
@@ -260,12 +259,13 @@ function resumeScreenState(state) {
   return null;
 }
 
-function renderPlayIntroResponse(state) {
+async function renderPlayIntroResponse(state) {
+  const frame = await buildSceneFrame(state);
   return {
     type: 7,
     data: {
-      content: `Experience를 준비하고 있습니다...\n\n${buildSceneContent(state)}`,
-      components: buildSceneButtons(state)
+      content: `Experience를 준비하고 있습니다...\n\n${frame.content}`,
+      components: frame.components
     }
   };
 }
@@ -349,44 +349,44 @@ function getCurrentExperienceBeat(state) {
   if (!experience) {
     return null;
   }
-  const flow = getFlowById(experience.flowId) ?? listFlows()[0] ?? null;
   const stageId = experience.currentStageId;
-  const stageName = stageId ? stageId.split("-").slice(1).join("-") : flow?.stageGraph[0] ?? null;
-  const stage =
-    flow && stageName
-      ? {
-          id: `${flow.id}-${stageName}`,
-          flowId: flow.id,
-          name: stageName,
-          purpose:
-            stageName.toLowerCase().includes("exploration")
-              ? "낯선 장소와 친해지세요."
-              : stageName.toLowerCase().includes("discovery")
-                ? "새로운 단서를 찾아보세요."
-                : stageName.toLowerCase().includes("challenge")
-                  ? "작은 긴장과 선택을 만들어보세요."
-                  : stageName.toLowerCase().includes("reflection")
-                    ? "지나온 장면을 정리해보세요."
-                    : stageName.toLowerCase().includes("conversation")
-                      ? "서로 대화하며 관계를 만들어보세요."
-                      : stageName.toLowerCase().includes("cooperation")
-                        ? "팀이 함께 움직이세요."
-                        : stageName.toLowerCase().includes("understanding")
-                          ? "서로를 더 잘 이해해보세요."
-                          : stageName.toLowerCase().includes("memory")
-                            ? "기억에 남을 장면을 남겨보세요."
-                            : stageName.toLowerCase().includes("question")
-                              ? "질문으로 시작해보세요."
-                              : stageName.toLowerCase().includes("clue")
-                                ? "작은 단서를 수집해보세요."
-                                : stageName.toLowerCase().includes("reveal")
-                                  ? "숨은 연결을 드러내보세요."
-                                  : stageName.toLowerCase().includes("resolution")
-                                    ? "정리와 마무리를 만들어보세요."
-                                    : "함께 움직여보세요.",
-          allowedNextStageIds: []
-        }
-      : null;
+  const flow = getFlowById(experience.flowId);
+  if (!flow || !stageId) {
+    return null;
+  }
+  const stageName = stageId.split("-").slice(1).join("-");
+  const stage = {
+    id: `${flow.id}-${stageName}`,
+    flowId: flow.id,
+    name: stageName,
+    purpose:
+      stageName.toLowerCase().includes("exploration")
+        ? "낯선 장소와 친해지세요."
+        : stageName.toLowerCase().includes("discovery")
+          ? "새로운 단서를 찾아보세요."
+          : stageName.toLowerCase().includes("challenge")
+            ? "작은 긴장과 선택을 만들어보세요."
+            : stageName.toLowerCase().includes("reflection")
+              ? "지나온 장면을 정리해보세요."
+              : stageName.toLowerCase().includes("conversation")
+                ? "서로 대화하며 관계를 만들어보세요."
+                : stageName.toLowerCase().includes("cooperation")
+                  ? "팀이 함께 움직이세요."
+                  : stageName.toLowerCase().includes("understanding")
+                    ? "서로를 더 잘 이해해보세요."
+                    : stageName.toLowerCase().includes("memory")
+                      ? "기억에 남을 장면을 남겨보세요."
+                      : stageName.toLowerCase().includes("question")
+                        ? "질문으로 시작해보세요."
+                        : stageName.toLowerCase().includes("clue")
+                          ? "작은 단서를 수집해보세요."
+                          : stageName.toLowerCase().includes("reveal")
+                            ? "숨은 연결을 드러내보세요."
+                            : stageName.toLowerCase().includes("resolution")
+                              ? "정리와 마무리를 만들어보세요."
+                              : "함께 움직여보세요.",
+    allowedNextStageIds: []
+  };
   const beat = stage ? buildStoryBeatForExperience(experience, stage) : null;
   return beat ? { ...beat, flow, stage } : null;
 }
@@ -454,6 +454,15 @@ function renderSceneContent(state) {
   }
   const beat = getCurrentExperienceBeat(state);
   if (!beat) {
+    if (state.experience?.status === "Playing" && state.experience?.flowId == null) {
+      return [
+        "🎬 오늘의 장면",
+        "",
+        "흐름이 아직 결정되지 않았습니다.",
+        "",
+        "흐름을 선택하면 Scene이 시작됩니다."
+      ].join("\n");
+    }
     return buildLegacyStatusContent(state);
   }
   const sceneInput = getSceneInputState(state);
@@ -473,6 +482,15 @@ async function renderSceneContentWithAi(state) {
   }
   const beat = getCurrentExperienceBeat(state);
   if (!beat) {
+    if (state.experience?.status === "Playing" && state.experience?.flowId == null) {
+      return [
+        "🎬 오늘의 장면",
+        "",
+        "흐름이 아직 결정되지 않았습니다.",
+        "",
+        "흐름을 선택하면 Scene이 시작됩니다."
+      ].join("\n");
+    }
     return buildLegacyStatusContent(state);
   }
   const sceneInput = getSceneInputState(state);
@@ -548,6 +566,12 @@ function buildSceneButtons(state, disabled = false) {
 }
 
 async function buildSceneFrame(state) {
+  if (state.experience?.status === "Playing" && !getCurrentExperienceBeat(state)) {
+    return {
+      content: await renderSceneContentWithAi(state),
+      components: buildFlowButtons()
+    };
+  }
   return {
     content: await renderSceneContentWithAi(state),
     components: buildSceneButtons(state)
@@ -612,36 +636,38 @@ function completionModal(interaction) {
   };
 }
 
-function sceneModal(interaction, kind) {
+function getTextMissionModalSpec(beat) {
+  const mission = beat?.mission ?? {};
+  const title =
+    typeof mission.title === "string" && mission.title.trim()
+      ? mission.title.trim()
+      : typeof mission.prompt_hint === "string" && mission.prompt_hint.trim()
+        ? mission.prompt_hint.trim()
+        : "답변 작성";
+  const description = typeof mission.description === "string" && mission.description.trim() ? mission.description.trim() : "";
+  const placeholder = typeof mission.placeholder === "string" && mission.placeholder.trim() ? mission.placeholder.trim() : "답변을 입력하세요.";
+  return { title, description, placeholder };
+}
+
+function textMissionModal(interaction, beat) {
+  const { title, description, placeholder } = getTextMissionModalSpec(beat);
+  const inputPlaceholder = description ? `${description} ${placeholder}`.trim() : placeholder;
   return {
     type: 9,
     data: {
-      title: kind === "record" ? "기록하기" : "선택하기",
-      custom_id: `scene:${kind}-modal:${interaction.channel_id}`,
+      title,
+      custom_id: `scene:record-modal:${interaction.channel_id}`,
       components: [
         {
           type: 1,
           components: [
             {
               type: 4,
-              custom_id: kind === "record" ? "text" : "choice",
-              label: kind === "record" ? "기록" : "선택",
+              custom_id: "answer",
+              label: "답변",
               style: 2,
               required: true,
-              placeholder: kind === "record" ? "지금 장면을 짧게 적어보세요." : "이 장면에서 무엇을 선택했는지 적으세요."
-            }
-          ]
-        },
-        {
-          type: 1,
-          components: [
-            {
-              type: 4,
-              custom_id: "reflection",
-              label: "짧은 메모",
-              style: 2,
-              required: false,
-              placeholder: "느낌, 메모, 관계를 적어도 됩니다."
+              placeholder: inputPlaceholder
             }
           ]
         }
@@ -768,18 +794,21 @@ function persistSceneResponse(state, interaction, response, sourceEventIds = [],
   if (!shouldPersistScene || (response.type !== 4 && response.type !== 7)) {
     return state;
   }
+  if (!getCurrentExperienceBeat(state)) {
+    return state;
+  }
   const content = response.data?.content ?? "";
   return publishScene(state, interaction, content, sourceEventIds);
 }
 
 function attachExperience(state, experience, flowId) {
-  const selectedFlow = getFlowById(flowId ?? experience.flowId) ?? getFlowById("adventure");
+  const selectedFlow = typeof flowId === "string" && flowId.trim() ? getFlowById(flowId.trim()) : getFlowById(experience.flowId);
   return {
     ...state,
     experience: {
       ...experience,
-      flowId: selectedFlow?.id ?? experience.flowId,
-      coverage: selectedFlow ? buildCoverage(selectedFlow) : experience.coverage
+      flowId: selectedFlow?.id ?? experience.flowId ?? null,
+      coverage: selectedFlow ? buildCoverage(selectedFlow) : experience.coverage ?? buildCoverage(null)
     },
     flows: listFlows(),
     phase: experience.status === "Ended" ? "FINISHED" : experience.status === "Playing" ? "PLAYING" : "READY"
@@ -833,7 +862,13 @@ function applySceneContinue(state) {
   if (!state.experience) {
     return selectNextMission(state);
   }
-  const flow = getFlowById(state.experience.flowId) ?? listFlows()[0] ?? null;
+  const flow = getFlowById(state.experience.flowId);
+  if (!flow) {
+    return {
+      ...state,
+      statusMessage: "흐름이 아직 결정되지 않았습니다."
+    };
+  }
   const nextStage = chooseNextStage(flow, state.experience.currentStageId);
   if (!nextStage) {
     return {
@@ -863,20 +898,21 @@ function applySceneContinue(state) {
 }
 
 function handleFlowSelection(state, flowId) {
+  const selectedFlow = getFlowById(flowId);
   const baseExperience =
     state.experience ??
     createExperience({
       participantNames: state.players.map((player) => player.name),
-      flowId
+      flowId: selectedFlow?.id ?? null
     }).experience;
-  const updated = setFlow(baseExperience, flowId);
+  const updated = setFlow(baseExperience, selectedFlow?.id ?? null);
   return {
     ...state,
     experience: updated.experience,
     flows: listFlows(),
     players: state.players.length > 0 ? state.players : updated.experience.participants,
     phase: state.phase === "PLAYING" ? "PLAYING" : "READY",
-    statusMessage: `흐름을 ${updated.flow.name}로 선택했습니다.`
+    statusMessage: updated.flow ? `흐름을 ${updated.flow.name}로 선택했습니다.` : "흐름을 선택하지 못했습니다."
   };
 }
 
@@ -966,7 +1002,7 @@ export async function handleDiscordInteraction(interaction) {
       const createdEvent = createEvent("ExperienceCreated", "discord-bot", {
         guild_id: interaction.guild_id ?? null,
         channel_id: interaction.channel_id,
-        flow_id: starting.flow.id,
+        flow_id: starting.flow?.id ?? null,
         player_names: begunExperience.participants.map((player) => player.name)
       });
       const nextState = prepareSession(
@@ -981,7 +1017,7 @@ export async function handleDiscordInteraction(interaction) {
               flows: listFlows()
             },
             begunExperience,
-            starting.flow.id
+            starting.flow?.id ?? null
           ),
           { screen: "playing" }
         ),
@@ -991,7 +1027,7 @@ export async function handleDiscordInteraction(interaction) {
         type: 4,
         data: {
           content: `Experience가 생성되었습니다.\n\n${await renderExperienceScene(nextState)}`,
-          components: [...buildFlowButtons(), ...buildSceneButtons(nextState)]
+          components: nextState.experience?.flowId == null ? buildFlowButtons() : [...buildFlowButtons(), ...buildSceneButtons(nextState)]
         }
       };
       const published = prepareSession(persistSceneResponse(nextState, interaction, response, [createdEvent.id], true), interaction);
@@ -1089,8 +1125,7 @@ export async function handleDiscordInteraction(interaction) {
       const currentExperience =
         sessionState.experience ??
         createExperience({
-          participantNames: sessionState.players.map((player) => player.name),
-          flowId: "adventure"
+          participantNames: sessionState.players.map((player) => player.name)
         }).experience;
       const endedExperience = endExperience(currentExperience);
       const endedEvent = createEvent("ExperienceEnded", "discord-bot", {
@@ -1202,7 +1237,7 @@ export async function handleDiscordInteraction(interaction) {
       }
       const baseExperience =
         sessionState.experience ??
-        createExperience({ participantNames: lobbyPlayers.map((player) => player.name), flowId: "adventure" }).experience;
+        createExperience({ participantNames: lobbyPlayers.map((player) => player.name) }).experience;
       const startedExperience = startExperience(syncExperienceParticipants(baseExperience, lobbyPlayers));
       const nextState = prepareSession(
         withUi(
@@ -1217,13 +1252,14 @@ export async function handleDiscordInteraction(interaction) {
         ),
         interaction
       );
-      const response = renderPlayIntroResponse(nextState);
+      const response = await renderPlayIntroResponse(nextState);
       const published = prepareSession(persistSceneResponse(nextState, interaction, response, [], true), interaction);
       await saveUpdatedSession(interaction, published);
       return response;
     }
     if (customId === "scene:record") {
-      return sceneModal(interaction, "record");
+      const beat = getCurrentExperienceBeat(sessionState);
+      return textMissionModal(interaction, beat);
     }
     if (customId.startsWith("scene:choice:")) {
       const choice = decodeURIComponent(customId.slice("scene:choice:".length));
@@ -1270,8 +1306,7 @@ export async function handleDiscordInteraction(interaction) {
       const submission = submitSceneInput(sessionState, interaction, "TEXT", {
         player_id: author.id,
         player_name: author.name,
-        text: values.text ?? "",
-        reflection: values.reflection ?? ""
+        text: values.answer ?? values.text ?? ""
       });
       const nextState = prepareSession(submission.state, interaction);
       const response = submission.completed ? await panelResponse(nextState) : await updateResponse(nextState);
@@ -1323,8 +1358,7 @@ export async function handleDiscordInteraction(interaction) {
       const submission = submitSceneInput(sessionState, interaction, "TEXT", {
         player_id: author.id,
         player_name: author.name,
-        text: values.text ?? "",
-        reflection: values.reflection ?? ""
+        text: values.answer ?? values.text ?? ""
       });
       const nextState = prepareSession(submission.state, interaction);
       const response = submission.completed ? await panelResponse(nextState) : await updateResponse(nextState);

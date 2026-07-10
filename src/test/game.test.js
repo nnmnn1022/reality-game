@@ -164,6 +164,29 @@ describe("discord reality mission engine", () => {
     });
 
     expect(startResponse.type).toBe(4);
+    const recordModal = await handleDiscordInteraction({
+      id: "interaction-record-modal-open",
+      type: 3,
+      token: "token",
+      guild_id: "guild-2",
+      channel_id: "channel-2",
+      data: {
+        custom_id: "scene:record"
+      },
+      member: {
+        user: {
+          id: "user-2",
+          username: "민지"
+        }
+      }
+    });
+
+    expect(recordModal.type).toBe(9);
+    expect(recordModal.data?.title).toBe("오늘 팀 분위기와 가장 닮은 색은?");
+    expect(recordModal.data?.components).toHaveLength(1);
+    expect(recordModal.data?.components?.[0]?.components).toHaveLength(1);
+    expect(recordModal.data?.components?.[0]?.components?.[0]?.label).toBe("답변");
+    expect(recordModal.data?.components?.[0]?.components?.[0]?.placeholder).toContain("예) 까만색");
 
     const modalResponse = await handleDiscordInteraction({
       id: "interaction-new-record",
@@ -175,10 +198,7 @@ describe("discord reality mission engine", () => {
         custom_id: "scene:record-modal:channel-2",
         components: [
           {
-            components: [{ custom_id: "text", value: "오늘의 첫 기록" }]
-          },
-          {
-            components: [{ custom_id: "reflection", value: "장면이 시작됐다" }]
+            components: [{ custom_id: "answer", value: "오늘의 첫 기록" }]
           }
         ]
       },
@@ -268,7 +288,7 @@ describe("discord reality mission engine", () => {
     expect(session?.state.ui?.screen).toBe("main-menu");
   });
 
-  it("creates an experience lobby, allows joining, and transitions into play", async () => {
+  it("creates an experience lobby, allows joining, and waits for an explicit flow selection", async () => {
     const storagePath = join(mkdtempSync(join(tmpdir(), "reality-game-")), "discord-sessions.json");
     vi.stubEnv("DISCORD_STORAGE_PATH", storagePath);
 
@@ -346,19 +366,23 @@ describe("discord reality mission engine", () => {
 
     expect(startResponse.type).toBe(7);
     expect(startResponse.data?.content).toContain("Experience를 준비하고 있습니다...");
-    expect(startResponse.data?.content).toContain("🎬 오늘의 장면");
+    expect(startResponse.data?.content).toContain("흐름이 아직 결정되지 않았습니다.");
     expect(startResponse.data?.content).not.toContain("Adventure");
     expect(startResponse.data?.components?.[0]?.components?.map((button) => button.custom_id)).toEqual([
-      "scene:record",
-      "scene:upload-photo"
+      "flow:adventure",
+      "flow:bond",
+      "flow:mystery",
+      "flow:chaos-trip",
+      "flow:random"
     ]);
 
     const session = await loadSession("guild-lobby:channel-lobby");
     expect(session?.state.phase).toBe("PLAYING");
     expect(session?.state.ui?.screen).toBe("playing");
     expect(session?.state.experience?.status).toBe("Playing");
-    expect(session?.state.currentSceneId).toBeTruthy();
-    expect(session?.state.scenes?.at(-1)?.content).toContain("Experience를 준비하고 있습니다...");
+    expect(session?.state.experience?.flowId).toBeNull();
+    expect(session?.state.currentSceneId).toBeUndefined();
+    expect(session?.state.scenes?.length ?? 0).toBe(0);
   });
 
   it("automatically advances to the next scene when all mission inputs are submitted", async () => {
@@ -382,33 +406,26 @@ describe("discord reality mission engine", () => {
       }
     });
 
-    await handleDiscordInteraction({
-      id: "interaction-auto-new",
-      type: 3,
+    const startResponse = await handleDiscordInteraction({
+      id: "interaction-auto-start",
+      type: 2,
       token: "token",
       guild_id: "guild-auto",
       channel_id: "channel-auto",
       data: {
-        custom_id: "menu:new-game"
+        name: "start-experience",
+        options: [
+          { name: "players", value: "민지, 지훈" },
+          { name: "flow", value: "random" }
+        ]
       },
       member: {
         user: makeUser("user-host", "호스트")
       }
     });
 
-    await handleDiscordInteraction({
-      id: "interaction-auto-join",
-      type: 3,
-      token: "token",
-      guild_id: "guild-auto",
-      channel_id: "channel-auto",
-      data: {
-        custom_id: "lobby:ready"
-      },
-      member: {
-        user: makeUser("user-host", "호스트")
-      }
-    });
+    expect(startResponse.type).toBe(4);
+    expect(startResponse.data?.content).toContain("🎬 오늘의 장면");
 
     const textResponse = await handleDiscordInteraction({
       id: "interaction-auto-text",
@@ -420,10 +437,7 @@ describe("discord reality mission engine", () => {
         custom_id: "scene:record-modal:channel-auto",
         components: [
           {
-            components: [{ custom_id: "text", value: "오늘 분위기를 짧게 적습니다." }]
-          },
-          {
-            components: [{ custom_id: "reflection", value: "첫 입력" }]
+            components: [{ custom_id: "answer", value: "오늘 분위기를 짧게 적습니다." }]
           }
         ]
       },

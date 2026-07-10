@@ -114,13 +114,34 @@ function stagePurposeToPrompt(stage, mission) {
   return `${stage.purpose} ${mission.description}`;
 }
 
+function buildMissionInputUi(mission) {
+  const inputUi = mission.inputUi ?? {};
+  return {
+    title: typeof inputUi.title === "string" && inputUi.title.trim() ? inputUi.title.trim() : mission.title,
+    description:
+      typeof inputUi.description === "string" && inputUi.description.trim()
+        ? inputUi.description.trim()
+        : typeof mission.description === "string"
+          ? mission.description.trim()
+          : "",
+    placeholder:
+      typeof inputUi.placeholder === "string" && inputUi.placeholder.trim()
+        ? inputUi.placeholder.trim()
+        : "답변을 입력하세요."
+  };
+}
+
 function missionToBeat(stage, mission) {
   const inputType = typeof mission.inputType === "string" && mission.inputType.trim() ? mission.inputType.trim() : "TEXT";
+  const inputUi = buildMissionInputUi(mission);
   return {
     id: `beat-${mission.id}`,
     stageId: stage.id,
     lifecycle: "Prepared",
     mission: {
+      title: inputUi.title,
+      description: inputUi.description,
+      placeholder: inputUi.placeholder,
       interaction_pattern: mission.interactionPattern ?? "Talk",
       constraint: mission.constraint ?? (mission.requiredTags.join(", ") || "none"),
       input_type: inputType,
@@ -147,21 +168,21 @@ export function buildCoverage(flow) {
 }
 
 export function createExperience(params) {
-  const flow = getFlowById(params.flowId ?? "adventure") ?? FLOW_LIBRARY[0];
+  const flow = typeof params.flowId === "string" && params.flowId.trim() ? getFlowById(params.flowId.trim()) : null;
   const participants = (params.participantNames ?? [])
     .map((name) => name.trim())
     .filter(Boolean)
     .map((name, index) => ({ id: `player-${index + 1}`, name }));
-  const stages = buildStages(flow);
+  const stages = flow ? buildStages(flow) : [];
   return {
     experience: {
       id: params.experienceId ?? newId("experience"),
       status: participants.length > 0 ? "Configured" : "Created",
-      flowId: flow.id,
+      flowId: flow?.id ?? null,
       participants,
       currentStageId: stages[0]?.id ?? null,
       currentStoryBeatId: null,
-      coverage: buildCoverage(flow),
+      coverage: buildCoverage(flow ?? null),
       createdAt: params.createdAt ?? now(),
       endedAt: null
     },
@@ -194,7 +215,19 @@ export function removeParticipant(experience, playerId) {
 }
 
 export function setFlow(experience, flowId) {
-  const flow = getFlowById(flowId) ?? FLOW_LIBRARY[0];
+  const flow = typeof flowId === "string" && flowId.trim() ? getFlowById(flowId.trim()) : null;
+  if (!flow) {
+    return {
+      experience: {
+        ...experience,
+        flowId: null,
+        currentStageId: null,
+        coverage: buildCoverage(null)
+      },
+      flow: null,
+      stages: []
+    };
+  }
   const stages = buildStages(flow);
   return {
     experience: {
