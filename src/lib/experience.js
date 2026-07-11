@@ -44,6 +44,22 @@ function now() {
   return new Date().toISOString();
 }
 
+function addMinutes(isoString, minutes) {
+  const timestamp = Date.parse(isoString ?? "");
+  if (Number.isNaN(timestamp) || !Number.isFinite(minutes)) {
+    return null;
+  }
+  return new Date(timestamp + minutes * 60 * 1000).toISOString();
+}
+
+function normalizeDurationMinutes(value, fallback = 60) {
+  const minutes = Number(value);
+  if (!Number.isFinite(minutes) || minutes <= 0) {
+    return fallback;
+  }
+  return Math.round(minutes);
+}
+
 function newId(prefix) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -199,6 +215,8 @@ export function buildCoverage(flow) {
 
 export function createExperience(params) {
   const flow = typeof params.flowId === "string" && params.flowId.trim() ? getFlowById(params.flowId.trim()) : null;
+  const startedAt = typeof params.startedAt === "string" && params.startedAt.trim() ? params.startedAt.trim() : null;
+  const plannedDurationMinutes = normalizeDurationMinutes(params.plannedDurationMinutes ?? 60);
   const participants = (params.participantNames ?? [])
     .map((name) => name.trim())
     .filter(Boolean)
@@ -214,7 +232,11 @@ export function createExperience(params) {
       currentStoryBeatId: null,
       coverage: buildCoverage(flow ?? null),
       createdAt: params.createdAt ?? now(),
-      endedAt: null
+      startedAt,
+      plannedDurationMinutes,
+      plannedEndAt: startedAt ? addMinutes(startedAt, plannedDurationMinutes) : null,
+      endedAt: null,
+      endingText: ""
     },
     flow,
     stages,
@@ -273,10 +295,15 @@ export function setFlow(experience, flowId) {
 }
 
 export function startExperience(experience) {
+  const startedAt = experience.startedAt ?? now();
+  const plannedDurationMinutes = normalizeDurationMinutes(experience.plannedDurationMinutes ?? 60);
   return {
     ...experience,
     status: "Playing",
-    currentStageId: experience.currentStageId ?? null
+    currentStageId: experience.currentStageId ?? null,
+    startedAt,
+    plannedDurationMinutes,
+    plannedEndAt: addMinutes(startedAt, plannedDurationMinutes)
   };
 }
 
@@ -286,6 +313,47 @@ export function endExperience(experience) {
     status: "Ended",
     endedAt: now()
   };
+}
+
+export function setExperiencePlannedDuration(experience, plannedDurationMinutes) {
+  const normalizedMinutes = normalizeDurationMinutes(plannedDurationMinutes, experience.plannedDurationMinutes ?? 60);
+  const startedAt = experience.startedAt ?? now();
+  return {
+    ...experience,
+    startedAt,
+    plannedDurationMinutes: normalizedMinutes,
+    plannedEndAt: addMinutes(startedAt, normalizedMinutes)
+  };
+}
+
+export function adjustExperiencePlannedDuration(experience, deltaMinutes) {
+  const currentMinutes = normalizeDurationMinutes(experience.plannedDurationMinutes ?? 60, 60);
+  const nextMinutes = Math.max(1, currentMinutes + Number(deltaMinutes));
+  return setExperiencePlannedDuration(experience, nextMinutes);
+}
+
+export function isExperienceTimeExpired(experience, referenceTime = now()) {
+  if (!experience?.plannedEndAt) {
+    return false;
+  }
+  const currentTime = Date.parse(referenceTime);
+  const plannedEndAt = Date.parse(experience.plannedEndAt);
+  if (Number.isNaN(currentTime) || Number.isNaN(plannedEndAt)) {
+    return false;
+  }
+  return currentTime >= plannedEndAt;
+}
+
+export function getExperienceRemainingMinutes(experience, referenceTime = now()) {
+  if (!experience?.plannedEndAt) {
+    return null;
+  }
+  const currentTime = Date.parse(referenceTime);
+  const plannedEndAt = Date.parse(experience.plannedEndAt);
+  if (Number.isNaN(currentTime) || Number.isNaN(plannedEndAt)) {
+    return null;
+  }
+  return Math.max(0, Math.ceil((plannedEndAt - currentTime) / 60000));
 }
 
 function phaseForStage(stageName) {
@@ -435,6 +503,29 @@ export function renderEndingNarrative(experience, memories) {
   const memoryLines =
     memories.length > 0 ? memories.map((memory) => `- ${memory.summary}`).join("\n") : "- 남은 기억은 아직 적지만 시작은 충분했습니다.";
   return [header, "", memoryLines].join("\n");
+}
+
+export function buildEndingStoryMemoryContext(experience, memories = [], results = []) {
+  return {
+    experienceId: experience?.id ?? null,
+    flowId: experience?.flowId ?? null,
+    flowName: getFlowById(experience?.flowId)?.name ?? null,
+    startedAt: experience?.startedAt ?? null,
+    plannedEndAt: experience?.plannedEndAt ?? null,
+    participants: Array.isArray(experience?.participants) ? experience.participants.map((participant) => participant.name) : [],
+    memories: memories.map((memory, index) => ({
+      index: index + 1,
+      summary: memory?.summary ?? "",
+      tags: Array.isArray(memory?.tags) ? memory.tags : [],
+      sourceSceneId: memory?.sourceSceneId ?? null
+    })),
+    results: results.map((result, index) => ({
+      index: index + 1,
+      type: result?.type ?? null,
+      payload: result?.payload ?? null,
+      createdAt: result?.createdAt ?? null
+    }))
+  };
 }
 
 export function summarizeMemoryCandidate(event) {

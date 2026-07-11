@@ -551,4 +551,128 @@ describe("discord reality mission engine", () => {
     expect(session?.state.events?.some((event) => event.type === "ExperienceProgressUpdated")).toBe(true);
     expect(session?.state.experience?.coverage?.achieved).toContain("unexpected");
   });
+
+  it("serializes concurrent session saves and keeps the session file valid", async () => {
+    const storagePath = join(mkdtempSync(join(tmpdir(), "reality-game-")), "nested", "discord-sessions.json");
+    vi.stubEnv("DISCORD_STORAGE_PATH", storagePath);
+
+    const { saveSession, loadSession } = await import("../lib/session-store.js");
+
+    await Promise.all(
+      Array.from({ length: 10 }, (_, index) =>
+        saveSession({
+          sessionKey: "guild-save:channel-save",
+          updatedAt: `2026-07-11T00:00:0${index}.000Z`,
+          state: {
+            index
+          }
+        })
+      )
+    );
+
+    const session = await loadSession("guild-save:channel-save");
+    expect(session).toBeTruthy();
+    expect(session?.state?.index).toBeGreaterThanOrEqual(0);
+  });
+
+  it("uses planned end time to move from mission completion into an ending narrative", async () => {
+    const storagePath = join(mkdtempSync(join(tmpdir(), "reality-game-")), "discord-sessions.json");
+    vi.stubEnv("DISCORD_STORAGE_PATH", storagePath);
+    vi.stubEnv("AI_MODEL", "gemini-test");
+    vi.stubEnv("AI_API_KEY", "test-key");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: "오늘의 기억은 조용하지만 선명하게 남았습니다." }]
+              }
+            }
+          ]
+        })
+      }))
+    );
+
+    const { handleDiscordInteraction } = await import("../lib/discord-interactions.js");
+    const { loadSession, saveSession } = await import("../lib/session-store.js");
+
+    await handleDiscordInteraction({
+      id: "interaction-time-start",
+      type: 2,
+      token: "token",
+      guild_id: "guild-time",
+      channel_id: "channel-time",
+      data: {
+        name: "start-experience",
+        options: [
+          { name: "players", value: "민지" },
+          { name: "flow", value: "random" },
+          { name: "duration", value: 1 }
+        ]
+      },
+      member: {
+        user: makeUser("user-time", "민지")
+      }
+    });
+
+    const sessionBefore = await loadSession("guild-time:channel-time");
+    await saveSession({
+      ...sessionBefore,
+      state: {
+        ...sessionBefore.state,
+        experience: {
+          ...sessionBefore.state.experience,
+          plannedEndAt: "2000-01-01T00:00:00.000Z"
+        }
+      }
+    });
+
+    const recordModal = await handleDiscordInteraction({
+      id: "interaction-time-record-open",
+      type: 3,
+      token: "token",
+      guild_id: "guild-time",
+      channel_id: "channel-time",
+      data: {
+        custom_id: "scene:record"
+      },
+      member: {
+        user: makeUser("user-time", "민지")
+      }
+    });
+
+    expect(recordModal.type).toBe(9);
+
+    const completionResponse = await handleDiscordInteraction({
+      id: "interaction-time-record-submit",
+      type: 5,
+      token: "token",
+      guild_id: "guild-time",
+      channel_id: "channel-time",
+      data: {
+        custom_id: "scene:record-modal:channel-time",
+        components: [
+          {
+            components: [{ custom_id: "answer", value: "남색" }]
+          }
+        ]
+      },
+      member: {
+        user: makeUser("user-time", "민지")
+      }
+    });
+
+    expect(completionResponse.type).toBe(7);
+    expect(completionResponse.data?.content).toContain("오늘의 기억은 조용하지만 선명하게 남았습니다.");
+
+    const finalSession = await loadSession("guild-time:channel-time");
+    expect(finalSession?.state?.experience?.status).toBe("Ended");
+    expect(finalSession?.state?.experience?.endedAt).toBeTruthy();
+    expect(finalSession?.state?.endingText).toContain("오늘의 기억");
+    expect(finalSession?.state?.events?.some((event) => event.type === "ExperienceEnded")).toBe(true);
+  });
 });

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import {
   buildCoverage,
+  buildEndingStoryMemoryContext,
   buildStoryBeatForExperience,
   advanceExperienceProgress,
   chooseNextStage,
@@ -9,14 +10,16 @@ import {
   createResult,
   endExperience,
   getFlowById,
+  getExperienceRemainingMinutes,
   listFlows,
-  renderEndingNarrative,
   renderScene,
+  isExperienceTimeExpired,
+  adjustExperiencePlannedDuration,
   setFlow,
   startExperience,
   summarizeMemoryCandidate
 } from "./experience.js";
-import { renderScenePromptWithAi } from "./ai-renderer.js";
+import { renderEndingNarrativeWithAi, renderScenePromptWithAi } from "./ai-renderer.js";
 import {
   buildSessionRecord,
   completeMission,
@@ -34,6 +37,19 @@ import {
 import { loadSession, resetSession, saveSession } from "./session-store.js";
 
 const LOBBY_CAPACITY = 4;
+const sessionExecutionQueues = new Map();
+
+function enqueueSessionTask(sessionKey, task) {
+  const previous = sessionExecutionQueues.get(sessionKey) ?? Promise.resolve();
+  const current = previous.then(task, task);
+  const tracked = current.catch(() => undefined);
+  sessionExecutionQueues.set(sessionKey, tracked);
+  return current.finally(() => {
+    if (sessionExecutionQueues.get(sessionKey) === tracked) {
+      sessionExecutionQueues.delete(sessionKey);
+    }
+  });
+}
 
 function collectOptionValues(options, target = {}) {
   for (const option of options ?? []) {
@@ -67,7 +83,13 @@ function parseStartOptions(interaction) {
     .map((value) => value.trim())
     .filter(Boolean);
   const flowId = (options.flow ?? options.flow_id ?? options.flowName ?? "").trim();
-  return { playerNames, environmentTags, flowId };
+  const durationMinutes = Number(options.duration_minutes ?? options.duration ?? options.minutes);
+  return {
+    playerNames,
+    environmentTags,
+    flowId,
+    durationMinutes: Number.isFinite(durationMinutes) && durationMinutes > 0 ? Math.round(durationMinutes) : null
+  };
 }
 
 function getSessionUi(state) {
@@ -274,6 +296,19 @@ function buildAiFailureButtons(disabled = false) {
   ];
 }
 
+function renderEndingFailureContent() {
+  return ["⚠️ AI 접근에 실패했습니다.", "", "잠시 후 다시 시도해주세요."].join("\n");
+}
+
+function buildEndingRetryButtons(disabled = false) {
+  return [
+    {
+      type: 1,
+      components: [{ type: 2, style: 1, custom_id: "ending:retry-ai", label: "재시도 하기", disabled }]
+    }
+  ];
+}
+
 async function renderPlayIntroResponse(state) {
   const frame = await buildSceneFrame(state);
   return {
@@ -317,6 +352,9 @@ function buildLegacyStatusContent(state) {
     `완료 미션: ${state.completedMissionIds.length}`,
     `복선: ${state.foreshadows.length}`
   ];
+  if (state.experience?.plannedEndAt) {
+    lines.push(getExperienceTimingMessage(state.experience));
+  }
   if (mission) {
     lines.push(`현재 미션: ${mission.title}`);
     lines.push(mission.description);
@@ -533,8 +571,12 @@ function hasPendingPhotoUpload(state) {
 }
 
 function renderSceneContent(state) {
-  if (state.experience?.status === "Ended" && state.endingText) {
-    return renderEndingNarrative(state.experience, state.storyMemories ?? []);
+  const endingText = state.endingText ?? state.experience?.endingText ?? "";
+  if (state.experience?.status === "Ended" && endingText) {
+    return endingText;
+  }
+  if (state.phase === "ENDING" && state.ui?.endingRetryPending) {
+    return renderEndingFailureContent();
   }
   const beat = getCurrentExperienceBeat(state);
   if (!beat) {
@@ -561,8 +603,12 @@ function renderSceneContent(state) {
 }
 
 async function renderSceneContentWithAi(state) {
-  if (state.experience?.status === "Ended" && state.endingText) {
-    return renderEndingNarrative(state.experience, state.storyMemories ?? []);
+  const endingText = state.endingText ?? state.experience?.endingText ?? "";
+  if (state.experience?.status === "Ended" && endingText) {
+    return endingText;
+  }
+  if (state.phase === "ENDING" && state.ui?.endingRetryPending) {
+    return renderEndingFailureContent();
   }
   const beat = getCurrentExperienceBeat(state);
   if (!beat) {
@@ -601,6 +647,9 @@ async function renderSceneContentWithAi(state) {
 function buildSceneButtons(state, disabled = false) {
   if (state.experience?.status === "Ended") {
     return [];
+  }
+  if (state.phase === "ENDING") {
+    return state.ui?.endingRetryPending ? buildEndingRetryButtons(disabled) : [];
   }
   if (state.ui?.sceneRetryPending) {
     return buildAiFailureButtons(disabled);
@@ -895,6 +944,9 @@ function persistSceneResponse(state, interaction, response, sourceEventIds = [],
   if (!shouldPersistScene || response.meta?.aiFailed || (response.type !== 4 && response.type !== 7)) {
     return state;
   }
+  if (state.phase === "ENDING" || state.experience?.status === "Ended") {
+    return state;
+  }
   if (!getCurrentExperienceBeat(state)) {
     return state;
   }
@@ -972,12 +1024,11 @@ function applySceneContinue(state) {
       ...state,
       experience: {
         ...state.experience,
-        status: "Ended",
-        endedAt: new Date().toISOString()
+        currentStageId: state.experience.currentStageId ?? null,
+        status: "Playing"
       },
-      phase: "ENDING",
-      endingText: renderEndingNarrative(state.experience, state.storyMemories ?? []),
-      statusMessage: "경험을 마무리했습니다."
+      phase: "PLAYING",
+      statusMessage: "현재 흐름을 유지합니다."
     };
   }
   return {
@@ -1010,6 +1061,79 @@ function handleFlowSelection(state, flowId) {
     players: state.players.length > 0 ? state.players : updated.experience.participants,
     phase: state.phase === "PLAYING" ? "PLAYING" : "READY",
     statusMessage: updated.flow ? `흐름을 ${updated.flow.name}로 선택했습니다.` : "흐름을 선택하지 못했습니다."
+  };
+}
+
+function getExperienceTimingMessage(experience) {
+  const remainingMinutes = getExperienceRemainingMinutes(experience);
+  if (remainingMinutes === null) {
+    return "남은 시간을 계산할 수 없습니다.";
+  }
+  return `남은 시간: 약 ${remainingMinutes}분`;
+}
+
+function buildEndingStoryMemoryPayload(state) {
+  return buildEndingStoryMemoryContext(state.experience, state.storyMemories ?? [], state.results ?? []);
+}
+
+async function attemptEndingGeneration(state) {
+  const endingContext = buildEndingStoryMemoryPayload(state);
+  const endingResult = await renderEndingNarrativeWithAi(endingContext, { timeoutMs: 15000 });
+  if (!endingResult) {
+    return {
+      state: withUi(state, {
+        endingRetryPending: true
+      }),
+      response: {
+        type: 7,
+        meta: { aiFailed: true },
+        data: {
+          content: renderEndingFailureContent(),
+          components: buildEndingRetryButtons()
+        }
+      },
+      completed: false
+    };
+  }
+
+  const endedExperience = endExperience({
+    ...state.experience,
+    endingText: endingResult
+  });
+  const endedEvent = createEvent("ExperienceEnded", "discord-bot", {
+    experience_id: endedExperience.id,
+    flow_id: endedExperience.flowId
+  });
+  const nextState = withUi(
+    appendEvents(
+      {
+        ...state,
+        experience: {
+          ...endedExperience,
+          endingText: endingResult
+        },
+        endingText: endingResult,
+        phase: "ENDING",
+        statusMessage: "Experience를 종료했습니다."
+      },
+      [endedEvent]
+    ),
+    {
+      endingRetryPending: false,
+      sceneRetryPending: false
+    }
+  );
+  return {
+    state: nextState,
+    response: {
+      type: 7,
+      data: {
+        content: endingResult,
+        components: []
+      }
+    },
+    completed: true,
+    event: endedEvent
   };
 }
 
@@ -1087,10 +1211,24 @@ function buildSceneCompletionState(state, submission, recordedEventId) {
 async function attemptSceneCompletion(state, submission) {
   const recordedEventId = state.events?.at(-1)?.id ?? null;
   const completedState = buildSceneCompletionState(state, submission, recordedEventId);
+  if (isExperienceTimeExpired(completedState.experience)) {
+    const endingAttempt = await attemptEndingGeneration(
+      withUi(
+        {
+          ...completedState,
+          phase: "ENDING"
+        },
+        { endingRetryPending: false }
+      )
+    );
+    return endingAttempt;
+  }
+
   const progressed = withUi(applySceneContinue(completedState), {
     screen: "playing",
     sceneInput: null,
-    sceneRetryPending: false
+    sceneRetryPending: false,
+    endingRetryPending: false
   });
   const renderedContent = await renderSceneContentWithAi(progressed);
   if (!renderedContent) {
@@ -1161,6 +1299,19 @@ async function retrySceneRender(state) {
   };
 }
 
+async function retryEndingRender(state) {
+  const endingAttempt = await attemptEndingGeneration(
+    withUi(
+      {
+        ...state,
+        phase: "ENDING"
+      },
+      { endingRetryPending: false }
+    )
+  );
+  return endingAttempt;
+}
+
 function buildRetrySceneSubmission(state) {
   const beat = getCurrentExperienceBeat(state);
   if (!beat) {
@@ -1222,17 +1373,19 @@ function submitSceneInput(state, interaction, inputType, payload) {
 }
 
 export async function handleDiscordInteraction(interaction) {
-  const session = await loadInteractionSession(interaction);
-  const sessionState = session?.state ?? resetGame();
-  if (sessionState.processedInteractionIds.includes(interaction.id)) {
-    return ephemeralMessage("이미 처리된 요청입니다.");
-  }
+  const sessionKey = createSessionKey(interaction.guild_id ?? null, interaction.channel_id);
+  return await enqueueSessionTask(sessionKey, async () => {
+    const session = await loadInteractionSession(interaction);
+    const sessionState = session?.state ?? resetGame();
+    if (sessionState.processedInteractionIds.includes(interaction.id)) {
+      return ephemeralMessage("이미 처리된 요청입니다.");
+    }
 
-  if (interaction.type === 1) {
-    return { type: 1 };
-  }
+    if (interaction.type === 1) {
+      return { type: 1 };
+    }
 
-  if (interaction.type === 2) {
+    if (interaction.type === 2) {
     const commandName = interaction.data?.name ?? "";
     const author = getAuthor(interaction);
     if (commandName === "begin") {
@@ -1245,17 +1398,20 @@ export async function handleDiscordInteraction(interaction) {
       return ephemeralMessage(renderStatusSnapshot(sessionState));
     }
     if (commandName === "start-experience") {
-      const { playerNames, flowId } = parseStartOptions(interaction);
+      const { playerNames, flowId, durationMinutes } = parseStartOptions(interaction);
       const starting = createExperience({
         participantNames: playerNames.length > 0 ? playerNames : [author.name],
-        flowId
+        flowId,
+        plannedDurationMinutes: durationMinutes ?? 60
       });
       const begunExperience = startExperience(starting.experience);
       const createdEvent = createEvent("ExperienceCreated", "discord-bot", {
         guild_id: interaction.guild_id ?? null,
         channel_id: interaction.channel_id,
         flow_id: starting.flow?.id ?? null,
-        player_names: begunExperience.participants.map((player) => player.name)
+        player_names: begunExperience.participants.map((player) => player.name),
+        planned_duration_minutes: begunExperience.plannedDurationMinutes,
+        planned_end_at: begunExperience.plannedEndAt
       });
       const nextState = prepareSession(
         withUi(
@@ -1291,6 +1447,37 @@ export async function handleDiscordInteraction(interaction) {
         scenes: published.scenes
       });
       return response;
+    }
+    if (commandName === "extend-time" || commandName === "shorten-time" || commandName === "time-left") {
+      if (!sessionState.experience) {
+        return ephemeralMessage("진행 중인 Experience가 없습니다.");
+      }
+      if (sessionState.experience.status === "Ended") {
+        return ephemeralMessage("이미 종료된 Experience입니다.");
+      }
+      const options = collectOptionValues(interaction.data?.options);
+      const minutesValue = Number(options.minutes ?? options.duration ?? 30);
+      const minutes = Number.isFinite(minutesValue) && minutesValue > 0 ? Math.round(minutesValue) : 30;
+      if (commandName === "time-left") {
+        return ephemeralMessage(getExperienceTimingMessage(sessionState.experience));
+      }
+      const nextExperience =
+        commandName === "extend-time"
+          ? adjustExperiencePlannedDuration(sessionState.experience, minutes)
+          : adjustExperiencePlannedDuration(sessionState.experience, -minutes);
+      const nextState = prepareSession(
+        withUi(
+          {
+            ...sessionState,
+            experience: nextExperience,
+            statusMessage: commandName === "extend-time" ? `진행 시간을 연장했습니다. ${getExperienceTimingMessage(nextExperience)}` : `진행 시간을 단축했습니다. ${getExperienceTimingMessage(nextExperience)}`
+          },
+          { screen: isPlayingState(sessionState) ? "playing" : getSessionUi(sessionState).screen }
+        ),
+        interaction
+      );
+      await saveUpdatedSession(interaction, nextState);
+      return ephemeralMessage(nextState.statusMessage);
     }
     if (commandName === "join") {
       const joined = joinLobbyState(sessionState, author);
@@ -1369,6 +1556,12 @@ export async function handleDiscordInteraction(interaction) {
       return response;
     }
     if (commandName === "continue") {
+      if (sessionState.phase === "ENDING" || sessionState.ui?.endingRetryPending) {
+        const retriedEnding = await retryEndingRender(sessionState);
+        const published = prepareSession(retriedEnding.state, interaction);
+        await saveUpdatedSession(interaction, published);
+        return retriedEnding.response;
+      }
       const continued = prepareSession(withUi(applySceneContinue(sessionState), { screen: "playing" }), interaction);
       const response = await updateResponse(continued);
       const published = prepareSession(persistSceneResponse(continued, interaction, response, [], true), interaction);
@@ -1381,18 +1574,28 @@ export async function handleDiscordInteraction(interaction) {
         createExperience({
           participantNames: sessionState.players.map((player) => player.name)
         }).experience;
-      const endedExperience = endExperience(currentExperience);
-      const endedEvent = createEvent("ExperienceEnded", "discord-bot", {
-        experience_id: endedExperience.id,
-        flow_id: endedExperience.flowId
-      });
+      const endingAttempt = await attemptEndingGeneration(
+        withUi(
+          {
+            ...sessionState,
+            experience: currentExperience,
+            phase: "ENDING"
+          },
+          { endingRetryPending: false }
+        )
+      );
+      if (!endingAttempt.completed) {
+        const retryState = prepareSession(endingAttempt.state, interaction);
+        await saveUpdatedSession(interaction, retryState);
+        return endingAttempt.response;
+      }
       const ended = prepareSession(
         withUi(
           {
-            ...appendEvents(sessionState, [endedEvent]),
-            experience: endedExperience,
+            ...endingAttempt.state,
+            experience: endingAttempt.state.experience,
             phase: "ENDING",
-            endingText: renderEndingNarrative(endedExperience, sessionState.storyMemories ?? []),
+            endingText: endingAttempt.state.endingText,
             statusMessage: "Experience를 종료했습니다."
           },
           { screen: "playing" }
@@ -1400,7 +1603,7 @@ export async function handleDiscordInteraction(interaction) {
         interaction
       );
       const response = await updateResponse(ended);
-      const published = prepareSession(persistSceneResponse(ended, interaction, response, [endedEvent.id], true), interaction);
+      const published = prepareSession(persistSceneResponse(ended, interaction, response, [endingAttempt.event?.id].filter(Boolean), true), interaction);
       await saveUpdatedSession(interaction, published);
       return response;
     }
@@ -1577,6 +1780,12 @@ export async function handleDiscordInteraction(interaction) {
       await saveUpdatedSession(interaction, published);
       return retried.response;
     }
+    if (customId === "ending:retry-ai") {
+      const retriedEnding = await retryEndingRender(sessionState);
+      const published = prepareSession(retriedEnding.state, interaction);
+      await saveUpdatedSession(interaction, published);
+      return retriedEnding.response;
+    }
     if (customId.startsWith("flow:")) {
       const flowId = customId.slice("flow:".length);
       const nextState = prepareSession(handleFlowSelection(sessionState, flowId), interaction);
@@ -1680,7 +1889,8 @@ export async function handleDiscordInteraction(interaction) {
     return response;
   }
 
-  return ephemeralMessage("지원하지 않는 interaction 입니다.");
+    return ephemeralMessage("지원하지 않는 interaction 입니다.");
+  });
 }
 
 function buildObservationEventType(observation) {
@@ -1704,15 +1914,16 @@ function buildObservationEventType(observation) {
 }
 
 export async function handleDiscordObservation(sessionKey, observation) {
-  const session = await loadSession(sessionKey);
-  const state = session?.state ?? resetGame();
-  const hasPhotoAttachments = Array.isArray(observation.payload?.attachments) && observation.payload.attachments.length > 0;
-  const observationId = observation.id ?? `${Date.now()}`;
-  const channelId = session?.channelId ?? observation.channelId ?? sessionKey.split(":").at(-1) ?? "unknown";
-  let nextState;
-  let response = null;
-  let completed = false;
-  let event;
+  return await enqueueSessionTask(sessionKey, async () => {
+    const session = await loadSession(sessionKey);
+    const state = session?.state ?? resetGame();
+    const hasPhotoAttachments = Array.isArray(observation.payload?.attachments) && observation.payload.attachments.length > 0;
+    const observationId = observation.id ?? `${Date.now()}`;
+    const channelId = session?.channelId ?? observation.channelId ?? sessionKey.split(":").at(-1) ?? "unknown";
+    let nextState;
+    let response = null;
+    let completed = false;
+    let event;
 
   if (hasPhotoAttachments) {
     const submission = submitSceneInput(state, { id: observation.id ?? `${Date.now()}`, channel_id: session?.channelId ?? observation.channelId ?? "unknown" }, "PHOTO", {
@@ -1790,19 +2001,20 @@ export async function handleDiscordObservation(sessionKey, observation) {
       )
     : nextState;
 
-  await saveSession({
-    ...(session ?? buildSessionRecord(null, publishedState.currentSceneId ?? channelId, publishedState)),
-    state: publishedState,
-    updatedAt: new Date().toISOString()
-  });
+    await saveSession({
+      ...(session ?? buildSessionRecord(null, publishedState.currentSceneId ?? channelId, publishedState)),
+      state: publishedState,
+      updatedAt: new Date().toISOString()
+    });
 
-  return {
-    state: publishedState,
-    response,
-    completed,
-    event,
-    sessionKey
-  };
+    return {
+      state: publishedState,
+      response,
+      completed,
+      event,
+      sessionKey
+    };
+  });
 }
 
 function ed25519PublicKeyFromHex(hexKey) {

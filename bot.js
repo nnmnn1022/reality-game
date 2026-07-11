@@ -41,7 +41,19 @@ function buildCommands() {
     new SlashCommandBuilder().setName("ending").setDescription("엔딩 문구를 생성합니다."),
     new SlashCommandBuilder().setName("finish").setDescription("게임을 종료 상태로 바꿉니다."),
     new SlashCommandBuilder().setName("reset").setDescription("현재 채널의 세션을 초기화합니다."),
-    new SlashCommandBuilder().setName("start-experience").setDescription("경험 세션을 바로 시작합니다."),
+    new SlashCommandBuilder()
+      .setName("start-experience")
+      .setDescription("경험 세션을 바로 시작합니다.")
+      .addIntegerOption((option) => option.setName("duration").setDescription("진행 시간(분)")),
+    new SlashCommandBuilder()
+      .setName("extend-time")
+      .setDescription("진행 시간을 연장합니다.")
+      .addIntegerOption((option) => option.setName("minutes").setDescription("연장할 시간(분)").setRequired(true)),
+    new SlashCommandBuilder()
+      .setName("shorten-time")
+      .setDescription("진행 시간을 단축합니다.")
+      .addIntegerOption((option) => option.setName("minutes").setDescription("단축할 시간(분)").setRequired(true)),
+    new SlashCommandBuilder().setName("time-left").setDescription("남은 시간을 확인합니다."),
     new SlashCommandBuilder().setName("join").setDescription("현재 로비에 참가합니다."),
     new SlashCommandBuilder().setName("leave").setDescription("현재 로비에서 나갑니다."),
     new SlashCommandBuilder().setName("choose-flow").setDescription("경험 흐름을 선택합니다."),
@@ -62,7 +74,7 @@ function buildCommands() {
   optionString(commands[9], "players", "참가자 이름을 쉼표로 구분해 입력합니다.", true);
   optionString(commands[9], "flow", "흐름 ID를 지정합니다.");
 
-  optionString(commands[12], "flow", "선택할 흐름 ID를 지정합니다.", true);
+  optionString(commands[15], "flow", "선택할 흐름 ID를 지정합니다.", true);
   return commands;
 }
 
@@ -176,10 +188,20 @@ function shouldDeferInteraction(interaction) {
     return true;
   }
   if (interaction.isChatInputCommand()) {
-    return ["start", "start-experience", "choose-flow", "continue", "end", "upload-photo"].includes(interaction.commandName);
+    return [
+      "start",
+      "start-experience",
+      "choose-flow",
+      "continue",
+      "end",
+      "upload-photo",
+      "extend-time",
+      "shorten-time",
+      "time-left"
+    ].includes(interaction.commandName);
   }
   if (interaction.isButton()) {
-    return ["lobby:ready", "scene:upload-photo", "scene:retry-ai"].includes(interaction.customId) || interaction.customId.startsWith("flow:");
+    return ["lobby:ready", "scene:upload-photo", "scene:retry-ai", "ending:retry-ai"].includes(interaction.customId) || interaction.customId.startsWith("flow:");
   }
   return false;
 }

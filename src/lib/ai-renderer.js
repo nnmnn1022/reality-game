@@ -34,6 +34,48 @@ function buildScenePrompt(context) {
   return lines.join("\n");
 }
 
+function buildEndingPrompt(context) {
+  const lines = [
+    "You are a Korean narrative writer for a Discord game ending.",
+    "Write plain Korean text only.",
+    "Do not mention internal engine terms such as Event, Memory, Story Memory, PlayerUploadedPhoto, PlayerSubmittedText, Flow, Stage, Coverage, State, Adventure, or Mission.",
+    "Do not use markdown, bullets, or quotes.",
+    "Do not invent events that did not happen.",
+    "Reflect only the provided story memories and player actions.",
+    "Keep it concise, emotional, and natural.",
+    "",
+    `Experience flow: ${context.flowName ?? "없음"}`,
+    `Participants: ${Array.isArray(context.participants) ? context.participants.join(", ") || "없음" : "없음"}`,
+    `Started at: ${context.startedAt ?? "없음"}`,
+    `Planned end at: ${context.plannedEndAt ?? "없음"}`
+  ];
+  if (Array.isArray(context.memories) && context.memories.length > 0) {
+    lines.push("");
+    lines.push("Story memories:");
+    for (const memory of context.memories) {
+      lines.push(`- ${memory.summary ?? ""}`);
+    }
+  }
+  if (Array.isArray(context.results) && context.results.length > 0) {
+    lines.push("");
+    lines.push("Mission results:");
+    for (const result of context.results) {
+      const payloadText =
+        typeof result?.payload?.text === "string" && result.payload.text.trim()
+          ? result.payload.text.trim()
+          : typeof result?.payload?.choice === "string" && result.payload.choice.trim()
+            ? result.payload.choice.trim()
+            : typeof result?.payload?.message === "string" && result.payload.message.trim()
+              ? result.payload.message.trim()
+              : "";
+      lines.push(`- ${result.type ?? "Result"}${payloadText ? `: ${payloadText}` : ""}`);
+    }
+  }
+  lines.push("");
+  lines.push("Return a short ending narrative.");
+  return lines.join("\n");
+}
+
 async function fetchWithTimeout(url, options, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const controller = new globalThis.AbortController();
   const timeout = globalThis.setTimeout(() => controller.abort(), timeoutMs);
@@ -181,5 +223,109 @@ export async function renderScenePromptWithAiDetailed(context, options = {}) {
 
 export async function renderScenePromptWithAi(context, options = {}) {
   const result = await renderScenePromptWithAiDetailed(context, options);
+  return result.text;
+}
+
+export async function renderEndingNarrativeWithAiDetailed(context, options = {}) {
+  const config = getAiConfig();
+  if (!config) {
+    return {
+      provider: "Gemini",
+      status: "DISABLED",
+      text: null,
+      elapsedMs: 0,
+      timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      responseCode: null,
+      requestStartedAt: new Date().toISOString(),
+      requestEndedAt: new Date().toISOString(),
+      error: null
+    };
+  }
+
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const requestStartedAt = new Date().toISOString();
+  const startedAt = Date.now();
+  const endpoint = `${GEMINI_BASE_URL}/models/${encodeURIComponent(config.model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
+  const payload = {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text: buildEndingPrompt(context)
+          }
+        ]
+      }
+    ],
+    generationConfig: {
+      temperature: 0.7,
+      maxOutputTokens: 220
+    }
+  };
+
+  try {
+    const response = await fetchWithTimeout(
+      endpoint,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      },
+      timeoutMs
+    );
+
+    if (!response.ok) {
+      const result = {
+        provider: "Gemini",
+        status: "ERROR",
+        text: null,
+        elapsedMs: Date.now() - startedAt,
+        timeoutMs,
+        responseCode: response.status,
+        requestStartedAt,
+        requestEndedAt: new Date().toISOString(),
+        error: `HTTP_${response.status}`
+      };
+      console.warn("AI Request", buildAiRequestLog(result));
+      return result;
+    }
+
+    const data = await response.json();
+    const text = extractTextFromGeminiResponse(data);
+    const result = {
+      provider: "Gemini",
+      status: text ? "SUCCESS" : "EMPTY",
+      text,
+      elapsedMs: Date.now() - startedAt,
+      timeoutMs,
+      responseCode: response.status,
+      requestStartedAt,
+      requestEndedAt: new Date().toISOString(),
+      error: null
+    };
+    console.info("AI Request", buildAiRequestLog(result));
+    return result;
+  } catch (error) {
+    const timedOut = isAbortError(error);
+    const result = {
+      provider: "Gemini",
+      status: timedOut ? "TIMEOUT" : "ERROR",
+      text: null,
+      elapsedMs: Date.now() - startedAt,
+      timeoutMs,
+      responseCode: null,
+      requestStartedAt,
+      requestEndedAt: new Date().toISOString(),
+      error: timedOut ? "TIMEOUT" : "REQUEST_FAILED"
+    };
+    console.warn("AI Request", buildAiRequestLog(result));
+    return result;
+  }
+}
+
+export async function renderEndingNarrativeWithAi(context, options = {}) {
+  const result = await renderEndingNarrativeWithAiDetailed(context, options);
   return result.text;
 }
