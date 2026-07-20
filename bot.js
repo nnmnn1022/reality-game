@@ -44,7 +44,7 @@ function buildCommands() {
     new SlashCommandBuilder()
       .setName("start-experience")
       .setDescription("경험 세션을 바로 시작합니다.")
-      .addIntegerOption((option) => option.setName("duration").setDescription("진행 시간(분)")),
+      .addIntegerOption((option) => option.setName("duration").setDescription("진행 시간(분)").setRequired(true)),
     new SlashCommandBuilder()
       .setName("extend-time")
       .setDescription("진행 시간을 연장합니다.")
@@ -154,7 +154,7 @@ function toRawInteraction(interaction) {
       custom_id: interaction.customId
     };
   } else if (interaction.isModalSubmit()) {
-    const knownFields = ["foreshadowText", "mood", "answer", "text", "choice", "reflection"];
+    const knownFields = ["foreshadowText", "mood", "answer", "text", "choice", "reflection", "durationMinutes", "minutes", "duration"];
     const components = knownFields
       .map((customId) => {
         try {

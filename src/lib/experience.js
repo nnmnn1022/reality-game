@@ -40,6 +40,33 @@ export const FLOW_LIBRARY = [
 
 const missionPool = missions;
 
+function normalizeString(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function missionMetadata(mission) {
+  const expectedDuration = Number(mission.expectedDuration ?? mission.durationMinutes ?? 5);
+  const minimumParticipants = Number(mission.minimumParticipants ?? 1);
+  return {
+    actionType: normalizeString(mission.actionType).toLowerCase() || "write",
+    purpose: normalizeString(mission.purpose).toLowerCase() || "exploration",
+    semanticKey: normalizeString(mission.semanticKey) || mission.id,
+    semanticGroup: normalizeString(mission.semanticGroup) || normalizeString(mission.semanticKey) || mission.id,
+    expectedDuration: Number.isFinite(expectedDuration) && expectedDuration > 0 ? Math.round(expectedDuration) : 5,
+    minimumParticipants: Number.isFinite(minimumParticipants) && minimumParticipants > 0 ? Math.round(minimumParticipants) : 1,
+    resultType: normalizeString(mission.resultType) || "text"
+  };
+}
+
+function enrichMission(mission) {
+  return {
+    ...mission,
+    ...missionMetadata(mission)
+  };
+}
+
+const enrichedMissionPool = missionPool.map(enrichMission);
+
 function now() {
   return new Date().toISOString();
 }
@@ -70,6 +97,10 @@ export function listFlows() {
 
 export function getFlowById(flowId) {
   return FLOW_LIBRARY.find((flow) => flow.id === flowId) ?? null;
+}
+
+export function getMissionById(missionId) {
+  return enrichedMissionPool.find((mission) => mission.id === missionId) ?? null;
 }
 
 function buildStages(flow) {
@@ -356,6 +387,38 @@ export function getExperienceRemainingMinutes(experience, referenceTime = now())
   return Math.max(0, Math.ceil((plannedEndAt - currentTime) / 60000));
 }
 
+export function recordMissionProgress(experience, mission) {
+  if (!experience || !mission) {
+    return experience;
+  }
+  const missionEntry = {
+    id: mission.id,
+    actionType: mission.actionType,
+    purpose: mission.purpose,
+    semanticKey: mission.semanticKey,
+    semanticGroup: mission.semanticGroup,
+    completedAt: now()
+  };
+  const missionHistory = [...(experience.missionHistory ?? []), missionEntry].slice(-8);
+  const recentActionTypes = [...(experience.recentActionTypes ?? []), mission.actionType].slice(-4);
+  const usedPurposeCounts = {
+    ...(experience.usedPurposeCounts ?? {}),
+    [mission.purpose]: (experience.usedPurposeCounts?.[mission.purpose] ?? 0) + 1
+  };
+  const usedSemanticKeys = Array.from(new Set([...(experience.usedSemanticKeys ?? []), mission.semanticKey]));
+  const usedSemanticGroups = Array.from(new Set([...(experience.usedSemanticGroups ?? []), mission.semanticGroup]));
+  const usedSemanticKeySet = [...usedSemanticKeys];
+  const usedSemanticGroupSet = [...usedSemanticGroups];
+  return {
+    ...experience,
+    missionHistory,
+    recentActionTypes,
+    usedPurposeCounts,
+    usedSemanticKeys: usedSemanticKeySet,
+    usedSemanticGroups: usedSemanticGroupSet
+  };
+}
+
 function phaseForStage(stageName) {
   const normalized = String(stageName ?? "").toLowerCase();
   if (["exploration", "conversation", "question", "awkward", "unexpected"].includes(normalized)) {
@@ -367,18 +430,208 @@ function phaseForStage(stageName) {
   return "late";
 }
 
-function pickMissionForStage(stage, completedMissionIds = []) {
-  const completed = new Set(completedMissionIds);
-  const phase = phaseForStage(stage?.name);
-  const safeMissions = missionPool.filter((mission) => mission.safetyFlags.includes("safe") && mission.category !== "emergency");
-  const phaseMissions = safeMissions.filter((mission) => mission.phase === phase && !completed.has(mission.id));
-  const anyMissions = safeMissions.filter((mission) => mission.phase === "any" && !completed.has(mission.id));
-  const reusablePhaseMissions = safeMissions.filter((mission) => mission.phase === phase);
-  return phaseMissions[0] ?? anyMissions[0] ?? reusablePhaseMissions[0] ?? safeMissions[0] ?? missionPool[0];
+function buildMissionHistoryFromIds(completedMissionIds = []) {
+  const history = [];
+  for (const missionId of completedMissionIds) {
+    const mission = getMissionById(missionId);
+    if (!mission) {
+      continue;
+    }
+    history.push({
+      id: mission.id,
+      actionType: mission.actionType,
+      purpose: mission.purpose,
+      semanticKey: mission.semanticKey,
+      semanticGroup: mission.semanticGroup
+    });
+  }
+  return history;
+}
+
+function countBy(items, key) {
+  const counts = new Map();
+  for (const item of items) {
+    const value = normalizeString(item?.[key]).toLowerCase();
+    if (!value) {
+      continue;
+    }
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function isLowIntensityAction(actionType) {
+  return ["write", "choose", "talk"].includes(normalizeString(actionType).toLowerCase());
+}
+
+function getRecent(items, count) {
+  return items.slice(Math.max(0, items.length - count));
+}
+
+function isReflectionAllowed(experience, usedPurposeCounts = {}, usedSemanticGroups = new Set()) {
+  const plannedDurationMinutes = Number(experience?.plannedDurationMinutes ?? 0);
+  const reflectionCount = Number(usedPurposeCounts.reflection ?? 0);
+  const closingMessageUsed = usedSemanticGroups.has("closing_message");
+  if (closingMessageUsed) {
+    return false;
+  }
+  if (!Number.isFinite(plannedDurationMinutes) || plannedDurationMinutes <= 0 || plannedDurationMinutes < 90) {
+    return reflectionCount === 0;
+  }
+  if (plannedDurationMinutes < 240) {
+    return reflectionCount < 1;
+  }
+  return reflectionCount < 2;
+}
+
+function evaluateMissionCandidate(mission, context) {
+  const completedMissionIds = new Set(context.completedMissionIds ?? []);
+  const missionHistory = context.missionHistory ?? [];
+  if (completedMissionIds.has(mission.id)) {
+    return { allowed: false, reason: "completed" };
+  }
+  if (context.phase && mission.phase !== "any" && mission.phase !== context.phase) {
+    return { allowed: false, reason: "phase" };
+  }
+  if (Array.isArray(context.environmentTags) && context.environmentTags.length > 0) {
+    if (!mission.requiredTags.every((tag) => context.environmentTags.includes(tag))) {
+      return { allowed: false, reason: "tags" };
+    }
+    if (mission.blockedTags.some((tag) => context.environmentTags.includes(tag))) {
+      return { allowed: false, reason: "blocked-tags" };
+    }
+  }
+  if (context.participantCount < mission.minimumParticipants) {
+    return { allowed: false, reason: "participants" };
+  }
+  if (context.endingRequested && mission.purpose !== "reflection" && mission.purpose !== "callback") {
+    return { allowed: false, reason: "ending" };
+  }
+
+  const recentMission = missionHistory.at(-1) ?? null;
+  const recentTypes = getRecent(missionHistory, 4).map((item) => item.actionType);
+  const recentTypeCount = recentTypes.filter((value) => value === mission.actionType).length;
+  if (recentMission && recentMission.actionType === mission.actionType && !context.allowSafetyRepeat) {
+    return { allowed: false, reason: "repeat-action" };
+  }
+  if (recentTypeCount >= 2 && !context.allowSafetyRepeat) {
+    return { allowed: false, reason: "recent-repeat" };
+  }
+
+  const recentLowIntensity = getRecent(missionHistory, 2);
+  if (
+    recentLowIntensity.length === 2 &&
+    recentLowIntensity.every((item) => isLowIntensityAction(item.actionType)) &&
+    isLowIntensityAction(mission.actionType)
+  ) {
+    return { allowed: false, reason: "low-intensity-streak" };
+  }
+
+  const usedPurposeCounts = context.usedPurposeCounts ?? {};
+  const usedSemanticGroups = context.usedSemanticGroups ?? new Set();
+  const usedSemanticKeys = context.usedSemanticKeys ?? new Set();
+  if (usedSemanticKeys.has(mission.semanticKey) || usedSemanticGroups.has(mission.semanticGroup)) {
+    return { allowed: false, reason: "semantic-repeat" };
+  }
+  if (mission.purpose === "reflection" && !isReflectionAllowed(context.experience, usedPurposeCounts, usedSemanticGroups)) {
+    return { allowed: false, reason: "reflection-limit" };
+  }
+  if (mission.purpose === "callback" && usedSemanticGroups.has("closing_message")) {
+    return { allowed: false, reason: "callback-closing-repeat" };
+  }
+
+  return { allowed: true };
+}
+
+function scoreMissionCandidate(mission, context) {
+  const history = context.missionHistory ?? [];
+  let score = 100;
+  const lastActionType = history.at(-1)?.actionType ?? null;
+  const lastPurpose = history.at(-1)?.purpose ?? null;
+
+  if (mission.actionType === lastActionType) {
+    score -= 100;
+  }
+  if (mission.purpose === lastPurpose) {
+    score -= 20;
+  }
+  if (mission.purpose === "reflection") {
+    score -= 10;
+  }
+  if (["move", "capture", "cooperate", "collect", "perform", "create"].includes(mission.actionType)) {
+    score += 15;
+  }
+  if (["write", "choose", "talk"].includes(mission.actionType)) {
+    score -= 5;
+  }
+  if (mission.category === "rest") {
+    score += 8;
+  }
+  if (mission.purpose === "callback") {
+    score += 12;
+  }
+  if (mission.purpose === "exploration" && context.phase === "early") {
+    score += 10;
+  }
+  if (mission.purpose === "interaction" && context.phase === "middle") {
+    score += 10;
+  }
+  if (mission.purpose === "recovery" && context.phase === "late") {
+    score += 10;
+  }
+  return score;
+}
+
+function selectMissionCandidate(candidates, context) {
+  const scored = candidates
+    .map((mission) => {
+      const evaluation = evaluateMissionCandidate(mission, context);
+      if (!evaluation.allowed) {
+        return null;
+      }
+      return {
+        mission,
+        score: scoreMissionCandidate(mission, context)
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.score - left.score);
+
+  return scored[0]?.mission ?? null;
+}
+
+function fallbackMissionCandidate(candidates, context) {
+  const relaxed = candidates.filter((mission) => mission.safetyFlags.includes("safe"));
+  return relaxed.find((mission) => evaluateMissionCandidate(mission, { ...context, allowSafetyRepeat: true }).allowed) ?? null;
 }
 
 export function buildStoryBeatForExperience(experience, stage, options = {}) {
-  const candidateMission = pickMissionForStage(stage, options.completedMissionIds ?? []);
+  if (!stage) {
+    return null;
+  }
+  const missionHistory = options.missionHistory ?? buildMissionHistoryFromIds(options.completedMissionIds ?? []);
+  const usedPurposeCounts = options.usedPurposeCounts ?? Object.fromEntries(countBy(missionHistory, "purpose"));
+  const usedSemanticKeys = options.usedSemanticKeys ?? new Set(missionHistory.map((item) => item.semanticKey));
+  const usedSemanticGroups = options.usedSemanticGroups ?? new Set(missionHistory.map((item) => item.semanticGroup));
+  const context = {
+    experience,
+    phase: phaseForStage(stage.name),
+    missionHistory,
+    completedMissionIds: options.completedMissionIds ?? [],
+    usedPurposeCounts,
+    usedSemanticKeys,
+    usedSemanticGroups,
+    environmentTags: options.environmentTags ?? [],
+    participantCount: options.participantCount ?? experience.participants?.length ?? 1,
+    endingRequested: Boolean(options.endingRequested),
+    allowSafetyRepeat: Boolean(options.allowSafetyRepeat)
+  };
+
+  const safeMissions = enrichedMissionPool.filter((mission) => mission.safetyFlags.includes("safe") && mission.category !== "emergency");
+  const phaseMissions = safeMissions.filter((mission) => mission.phase === context.phase);
+  const anyMissions = safeMissions.filter((mission) => mission.phase === "any");
+  const candidates = [...phaseMissions, ...anyMissions];
+  const candidateMission = selectMissionCandidate(candidates, context) ?? fallbackMissionCandidate(candidates, context);
   if (!stage || !candidateMission) {
     return null;
   }
@@ -530,13 +783,20 @@ export function buildEndingStoryMemoryContext(experience, memories = [], results
 
 export function summarizeMemoryCandidate(event) {
   const payload = event.payload;
-  const summaryParts = [event.type];
   if (typeof payload.text === "string" && payload.text.trim()) {
-    summaryParts.push(payload.text.trim());
-  } else if (typeof payload.choice === "string") {
-    summaryParts.push(payload.choice);
-  } else if (typeof payload.message === "string") {
-    summaryParts.push(payload.message);
+    return payload.text.trim();
   }
-  return summaryParts.join(": ");
+  if (typeof payload.choice === "string" && payload.choice.trim()) {
+    return payload.choice.trim();
+  }
+  if (typeof payload.message === "string" && payload.message.trim()) {
+    return payload.message.trim();
+  }
+  if (Array.isArray(payload.attachments) && payload.attachments.length > 0) {
+    return "사진을 남겼습니다.";
+  }
+  if (typeof payload.content === "string" && payload.content.trim()) {
+    return payload.content.trim();
+  }
+  return "기록이 남았습니다.";
 }

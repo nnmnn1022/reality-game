@@ -153,7 +153,8 @@ describe("discord reality mission engine", () => {
         name: "start-experience",
         options: [
           { name: "players", value: "민지, 지훈" },
-          { name: "flow", value: "adventure" }
+          { name: "flow", value: "adventure" },
+          { name: "duration", value: 60 }
         ]
       },
       member: {
@@ -233,7 +234,8 @@ describe("discord reality mission engine", () => {
         name: "start-experience",
         options: [
           { name: "players", value: "민지" },
-          { name: "flow", value: "random" }
+          { name: "flow", value: "random" },
+          { name: "duration", value: 60 }
         ]
       },
       member: {
@@ -290,7 +292,8 @@ describe("discord reality mission engine", () => {
         name: "start-experience",
         options: [
           { name: "players", value: "민지, 지훈" },
-          { name: "flow", value: "random" }
+          { name: "flow", value: "random" },
+          { name: "duration", value: 60 }
         ]
       },
       member: {
@@ -386,6 +389,46 @@ describe("discord reality mission engine", () => {
       "lobby:join",
       "lobby:ready"
     ]);
+    expect(lobbyResponse.data?.components?.[1]?.components?.map((button) => button.custom_id)).toEqual([
+      "lobby:duration:30",
+      "lobby:duration:60",
+      "lobby:duration:120",
+      "lobby:duration:custom"
+    ]);
+
+    const readyBeforeDuration = await handleDiscordInteraction({
+      id: "interaction-lobby-ready-before-duration",
+      type: 3,
+      token: "token",
+      guild_id: "guild-lobby",
+      channel_id: "channel-lobby",
+      data: {
+        custom_id: "lobby:ready"
+      },
+      member: {
+        user: makeUser("user-host", "호스트")
+      }
+    });
+
+    expect(readyBeforeDuration.type).toBe(4);
+    expect(readyBeforeDuration.data?.content).toContain("먼저 진행 시간을 선택해 주세요.");
+
+    const durationResponse = await handleDiscordInteraction({
+      id: "interaction-lobby-duration-60",
+      type: 3,
+      token: "token",
+      guild_id: "guild-lobby",
+      channel_id: "channel-lobby",
+      data: {
+        custom_id: "lobby:duration:60"
+      },
+      member: {
+        user: makeUser("user-host", "호스트")
+      }
+    });
+
+    expect(durationResponse.type).toBe(7);
+    expect(durationResponse.data?.content).toContain("진행 시간: 60분");
 
     const joinedResponse = await handleDiscordInteraction({
       id: "interaction-lobby-join-1",
@@ -489,7 +532,8 @@ describe("discord reality mission engine", () => {
         name: "start-experience",
         options: [
           { name: "players", value: "민지, 지훈" },
-          { name: "flow", value: "random" }
+          { name: "flow", value: "random" },
+          { name: "duration", value: 60 }
         ]
       },
       member: {

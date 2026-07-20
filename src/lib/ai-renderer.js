@@ -56,21 +56,6 @@ function buildEndingPrompt(context) {
       lines.push(`- ${memory.summary ?? ""}`);
     }
   }
-  if (Array.isArray(context.results) && context.results.length > 0) {
-    lines.push("");
-    lines.push("Mission results:");
-    for (const result of context.results) {
-      const payloadText =
-        typeof result?.payload?.text === "string" && result.payload.text.trim()
-          ? result.payload.text.trim()
-          : typeof result?.payload?.choice === "string" && result.payload.choice.trim()
-            ? result.payload.choice.trim()
-            : typeof result?.payload?.message === "string" && result.payload.message.trim()
-              ? result.payload.message.trim()
-              : "";
-      lines.push(`- ${result.type ?? "Result"}${payloadText ? `: ${payloadText}` : ""}`);
-    }
-  }
   lines.push("");
   lines.push("Return a short ending narrative.");
   return lines.join("\n");
