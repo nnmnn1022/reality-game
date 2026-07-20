@@ -15,6 +15,8 @@ import {
   renderScene,
   isExperienceTimeExpired,
   adjustExperiencePlannedDuration,
+  setExperiencePlannedDuration,
+  recordMissionProgress,
   setFlow,
   startExperience,
   summarizeMemoryCandidate
@@ -145,13 +147,29 @@ function renderMainMenuResponse() {
   };
 }
 
-function buildLobbyButtons(disabled = false) {
+function getLobbySelectedDuration(state) {
+  const plannedDurationMinutes = state.experience?.plannedDurationMinutes ?? state.ui?.lobby?.plannedDurationMinutes ?? null;
+  return Number.isFinite(Number(plannedDurationMinutes)) && Number(plannedDurationMinutes) > 0 ? Math.round(Number(plannedDurationMinutes)) : null;
+}
+
+function buildLobbyButtons(state, disabled = false) {
+  const selectedDuration = getLobbySelectedDuration(state);
+  const readyDisabled = disabled || !selectedDuration;
   return [
     {
       type: 1,
       components: [
         { type: 2, style: 1, custom_id: "lobby:join", label: "참가하기", disabled },
-        { type: 2, style: 3, custom_id: "lobby:ready", label: "준비 완료", disabled }
+        { type: 2, style: 3, custom_id: "lobby:ready", label: readyDisabled ? "시간을 먼저 선택하세요" : "준비 완료", disabled: readyDisabled }
+      ]
+    },
+    {
+      type: 1,
+      components: [
+        { type: 2, style: 2, custom_id: "lobby:duration:30", label: "30분", disabled },
+        { type: 2, style: 2, custom_id: "lobby:duration:60", label: "1시간", disabled },
+        { type: 2, style: 2, custom_id: "lobby:duration:120", label: "2시간", disabled },
+        { type: 2, style: 2, custom_id: "lobby:duration:custom", label: "직접 설정", disabled }
       ]
     }
   ];
@@ -173,6 +191,9 @@ function renderLobbyContent(state) {
   }
   lines.push("");
   lines.push(`${participants.length} / ${capacity}`);
+  const selectedDuration = getLobbySelectedDuration(state);
+  lines.push("");
+  lines.push(selectedDuration ? `진행 시간: ${selectedDuration}분` : "진행 시간을 선택해 주세요.");
   return lines.join("\n");
 }
 
@@ -181,7 +202,32 @@ function renderLobbyResponse(state) {
     type: 7,
     data: {
       content: renderLobbyContent(state),
-      components: buildLobbyButtons()
+      components: buildLobbyButtons(state)
+    }
+  };
+}
+
+function buildLobbyDurationModal(customId) {
+  return {
+    type: 9,
+    data: {
+      title: "진행 시간 설정",
+      custom_id: customId,
+      components: [
+        {
+          type: 1,
+          components: [
+            {
+              type: 4,
+              custom_id: "durationMinutes",
+              label: "분 단위 시간",
+              style: 1,
+              required: true,
+              placeholder: "예) 60"
+            }
+          ]
+        }
+      ]
     }
   };
 }
@@ -217,7 +263,8 @@ function createExperienceLobbyState(author) {
   const baseState = resetGame();
   const initialPlayers = [{ id: author.id, name: author.name }];
   const created = createExperience({
-    participantNames: initialPlayers.map((player) => player.name)
+    participantNames: initialPlayers.map((player) => player.name),
+    plannedDurationMinutes: null
   });
   return withUi(
     {
@@ -227,7 +274,9 @@ function createExperienceLobbyState(author) {
       statusMessage: "Experience를 생성했습니다.",
       experience: {
         ...created.experience,
-        status: "Created"
+        status: "Created",
+        plannedDurationMinutes: null,
+        plannedEndAt: null
       },
       flows: listFlows()
     },
@@ -235,7 +284,38 @@ function createExperienceLobbyState(author) {
       screen: "lobby",
       lobby: {
         capacity: LOBBY_CAPACITY,
-        hostId: author.id
+        hostId: author.id,
+        plannedDurationMinutes: null
+      }
+    }
+  );
+}
+
+function applyLobbyDurationSelection(state, durationMinutes) {
+  const normalizedMinutes = Number(durationMinutes);
+  if (!Number.isFinite(normalizedMinutes) || normalizedMinutes <= 0) {
+    return withUi(state, {
+      statusMessage: "진행 시간을 확인할 수 없습니다."
+    });
+  }
+  const nextExperience = setExperiencePlannedDuration(
+    state.experience ?? createExperience({ participantNames: state.players.map((player) => player.name) }).experience,
+    Math.round(normalizedMinutes)
+  );
+  return withUi(
+    {
+      ...state,
+      experience: {
+        ...nextExperience,
+        status: state.experience?.status ?? "Created"
+      },
+      statusMessage: `진행 시간을 ${Math.round(normalizedMinutes)}분으로 설정했습니다.`
+    },
+    {
+      screen: "lobby",
+      lobby: {
+        ...(state.ui?.lobby ?? { capacity: LOBBY_CAPACITY, hostId: state.ui?.lobby?.hostId ?? null }),
+        plannedDurationMinutes: Math.round(normalizedMinutes)
       }
     }
   );
@@ -478,7 +558,18 @@ function getCurrentExperienceBeat(state) {
       })
       .filter(Boolean)
   ];
-  const beat = stage ? buildStoryBeatForExperience(experience, stage, { completedMissionIds }) : null;
+  const beat = stage
+    ? buildStoryBeatForExperience(experience, stage, {
+      completedMissionIds,
+      missionHistory: experience.missionHistory ?? [],
+      usedPurposeCounts: experience.usedPurposeCounts ?? {},
+      usedSemanticKeys: new Set(experience.usedSemanticKeys ?? []),
+      usedSemanticGroups: new Set(experience.usedSemanticGroups ?? []),
+      environmentTags: state.environmentTags ?? [],
+      participantCount: state.players?.length ?? experience.participants?.length ?? 1,
+      endingRequested: state.phase === "ENDING"
+    })
+    : null;
   return beat ? { ...beat, flow, stage } : null;
 }
 
@@ -855,18 +946,38 @@ function ephemeralMessage(content) {
 }
 
 async function saveUpdatedSession(interaction, state, extra = {}) {
+  const beforeState = extra.beforeState ?? interaction.__beforeState ?? null;
   const mergedState = {
     ...state,
     events: extra.events ?? state.events,
     experience: extra.experience ?? state.experience,
-    scenes: extra.scenes ?? state.scenes
+    scenes: extra.scenes ?? state.scenes,
+    processedInteractionIds: markProcessedInteraction(state, interaction.id)
   };
-  await saveSession({
-    ...buildSessionRecord(interaction.guild_id ?? null, interaction.channel_id, mergedState),
-    events: mergedState.events,
-    experience: mergedState.experience,
-    scenes: mergedState.scenes
-  });
+  try {
+    await saveSession({
+      ...buildSessionRecord(interaction.guild_id ?? null, interaction.channel_id, mergedState),
+      events: mergedState.events,
+      experience: mergedState.experience,
+      scenes: mergedState.scenes
+    });
+    logInteractionLifecycle(interaction, {
+      handler: extra.handler,
+      duplicate: false,
+      beforeState,
+      afterState: mergedState,
+      saveSucceeded: true
+    });
+  } catch (error) {
+    logInteractionLifecycle(interaction, {
+      handler: extra.handler,
+      duplicate: false,
+      beforeState,
+      afterState: mergedState,
+      saveSucceeded: false
+    });
+    throw error;
+  }
 }
 
 function pushEvent(state, event) {
@@ -968,13 +1079,135 @@ function attachExperience(state, experience, flowId) {
   };
 }
 
-function prepareSession(state, interaction) {
+function markProcessedInteraction(state, interactionId) {
+  const processedInteractionIds = Array.isArray(state?.processedInteractionIds) ? state.processedInteractionIds : [];
+  if (!interactionId || processedInteractionIds.includes(interactionId)) {
+    return processedInteractionIds;
+  }
+  return [...processedInteractionIds, interactionId];
+}
+
+function prepareSession(state) {
+  return state;
+}
+
+function stateLogSummary(state) {
   return {
-    ...state,
-    processedInteractionIds: state.processedInteractionIds.includes(interaction.id)
-      ? state.processedInteractionIds
-      : [...state.processedInteractionIds, interaction.id]
+    phase: state?.phase ?? null,
+    screen: state?.ui?.screen ?? null,
+    experienceStatus: state?.experience?.status ?? null
   };
+}
+
+function getInteractionCommandName(interaction) {
+  if (interaction.type === 2) {
+    return interaction.data?.name ?? "";
+  }
+  return null;
+}
+
+function getInteractionCustomId(interaction) {
+  if (interaction.type === 3 || interaction.type === 5) {
+    return interaction.data?.custom_id ?? "";
+  }
+  return null;
+}
+
+function getInteractionHandlerName(interaction) {
+  const commandName = getInteractionCommandName(interaction);
+  const customId = getInteractionCustomId(interaction);
+  if (interaction.type === 1) {
+    return "ping";
+  }
+  if (interaction.type === 2) {
+    return `command:${commandName || "unknown"}`;
+  }
+  if (interaction.type === 3) {
+    if (customId === "menu:new-game") {
+      return "component:menu-new-game";
+    }
+    if (customId === "menu:join-game") {
+      return "component:menu-join-game";
+    }
+    if (customId === "menu:resume") {
+      return "component:menu-resume";
+    }
+    if (customId === "lobby:join") {
+      return "component:lobby-join";
+    }
+    if (customId.startsWith("lobby:duration:")) {
+      return "component:lobby-duration";
+    }
+    if (customId === "lobby:ready") {
+      return "component:lobby-ready";
+    }
+    if (customId === "scene:record") {
+      return "component:scene-record";
+    }
+    if (customId.startsWith("scene:choice:")) {
+      return "component:scene-choice";
+    }
+    if (customId === "scene:upload-photo") {
+      return "component:scene-upload-photo";
+    }
+    if (customId === "scene:retry-ai") {
+      return "component:scene-retry-ai";
+    }
+    if (customId === "ending:retry-ai") {
+      return "component:ending-retry-ai";
+    }
+    if (customId.startsWith("lobby:duration-modal:")) {
+      return "component:lobby-duration-modal-open";
+    }
+    if (customId.startsWith("flow:")) {
+      return "component:flow";
+    }
+    if (customId.startsWith("scene:record-modal")) {
+      return "component:scene-record-modal";
+    }
+    if (customId.startsWith("game:")) {
+      return `component:${customId}`;
+    }
+    return "component:unknown";
+  }
+  if (interaction.type === 5) {
+    if (customId.startsWith("lobby:duration-modal:")) {
+      return "modal:lobby-duration";
+    }
+    if (customId.startsWith("scene:record-modal")) {
+      return "modal:scene-record";
+    }
+    return "modal:legacy-complete";
+  }
+  return "interaction:unsupported";
+}
+
+function logInteractionLifecycle(interaction, details) {
+  console.info("discord interaction handled", {
+    interactionId: interaction.id,
+    commandName: getInteractionCommandName(interaction),
+    customId: getInteractionCustomId(interaction),
+    sessionKey: createSessionKey(interaction.guild_id ?? null, interaction.channel_id),
+    currentState: stateLogSummary(details.beforeState),
+    handler: details.handler ?? interaction.__handlerName ?? getInteractionHandlerName(interaction),
+    duplicate: Boolean(details.duplicate),
+    beforeState: stateLogSummary(details.beforeState),
+    afterState: stateLogSummary(details.afterState),
+    saveSucceeded: details.saveSucceeded
+  });
+}
+
+async function renderCurrentSessionResponse(state, initial = false) {
+  if (isPlayingState(state) || state.phase === "ENDING" || state.ui?.endingRetryPending) {
+    return await renderPlayStatusResponse(state, initial);
+  }
+  if (hasLobbyState(state)) {
+    return renderLobbyResponse(state);
+  }
+  if (getSessionUi(state).screen === "main-menu") {
+    return renderMainMenuResponse();
+  }
+  return ephemeralMessage(renderStatusSnapshot(state));
 }
 
 async function loadInteractionSession(interaction) {
@@ -1162,7 +1395,10 @@ function buildSceneCompletionState(state, submission, recordedEventId) {
     text: typeof submission.payload?.text === "string" ? submission.payload.text : null,
     photo_submitted: submission.inputType === "PHOTO"
   });
-  const nextExperience = advanceExperienceProgress(state.experience, submission.beat.stage?.name ?? null);
+  const progressedExperience = recordMissionProgress(
+    advanceExperienceProgress(state.experience, submission.beat.stage?.name ?? null),
+    submission.beat.mission
+  );
   const completedState = appendEvents(
     pushResult(
       {
@@ -1171,7 +1407,7 @@ function buildSceneCompletionState(state, submission, recordedEventId) {
           submission.beat.mission?.id && !(state.completedMissionIds ?? []).includes(submission.beat.mission.id)
             ? [...(state.completedMissionIds ?? []), submission.beat.mission.id]
             : (state.completedMissionIds ?? []),
-        experience: nextExperience
+        experience: progressedExperience
       },
       completedResult
     ),
@@ -1193,8 +1429,8 @@ function buildSceneCompletionState(state, submission, recordedEventId) {
       createEvent("ExperienceProgressUpdated", "discord-bot", {
         experience_id: state.experience?.id ?? null,
         completed_stage: submission.beat.stage?.name ?? null,
-        achieved: nextExperience?.coverage?.achieved ?? [],
-        pending: nextExperience?.coverage?.pending ?? []
+        achieved: progressedExperience?.coverage?.achieved ?? [],
+        pending: progressedExperience?.coverage?.pending ?? []
       })
     ]
   );
@@ -1377,11 +1613,28 @@ export async function handleDiscordInteraction(interaction) {
   return await enqueueSessionTask(sessionKey, async () => {
     const session = await loadInteractionSession(interaction);
     const sessionState = session?.state ?? resetGame();
+    interaction.__beforeState = sessionState;
+    interaction.__handlerName = getInteractionHandlerName(interaction);
     if (sessionState.processedInteractionIds.includes(interaction.id)) {
-      return ephemeralMessage("이미 처리된 요청입니다.");
+      const response = await renderCurrentSessionResponse(sessionState);
+      logInteractionLifecycle(interaction, {
+        handler: interaction.__handlerName,
+        duplicate: true,
+        beforeState: sessionState,
+        afterState: sessionState,
+        saveSucceeded: null
+      });
+      return response;
     }
 
     if (interaction.type === 1) {
+      logInteractionLifecycle(interaction, {
+        handler: interaction.__handlerName,
+        duplicate: false,
+        beforeState: sessionState,
+        afterState: sessionState,
+        saveSucceeded: null
+      });
       return { type: 1 };
     }
 
@@ -1389,7 +1642,16 @@ export async function handleDiscordInteraction(interaction) {
     const commandName = interaction.data?.name ?? "";
     const author = getAuthor(interaction);
     if (commandName === "begin") {
-      const nextState = prepareSession(withUi(sessionState, { screen: "main-menu" }), interaction);
+      const nextState = prepareSession(
+        withUi(
+          {
+            ...sessionState,
+            processedInteractionIds: []
+          },
+          { screen: "main-menu" }
+        ),
+        interaction
+      );
       const response = renderMainMenuResponse();
       await saveUpdatedSession(interaction, nextState);
       return response;
@@ -1404,7 +1666,8 @@ export async function handleDiscordInteraction(interaction) {
         flowId,
         plannedDurationMinutes: durationMinutes ?? 60
       });
-      const begunExperience = startExperience(starting.experience);
+      const configuredExperience = setFlow(starting.experience, starting.flow?.id ?? null).experience;
+      const begunExperience = startExperience(configuredExperience);
       const createdEvent = createEvent("ExperienceCreated", "discord-bot", {
         guild_id: interaction.guild_id ?? null,
         channel_id: interaction.channel_id,
@@ -1684,6 +1947,25 @@ export async function handleDiscordInteraction(interaction) {
       await saveUpdatedSession(interaction, nextState);
       return renderLobbyResponse(nextState);
     }
+    if (customId.startsWith("lobby:duration:")) {
+      if (!hasLobbyState(sessionState)) {
+        return ephemeralMessage("진행 중인 로비가 없습니다.");
+      }
+      if ((sessionState.ui?.lobby?.hostId ?? author.id) !== author.id) {
+        return ephemeralMessage("호스트만 진행 시간을 설정할 수 있습니다.");
+      }
+      if (getLobbySelectedDuration(sessionState)) {
+        await saveUpdatedSession(interaction, sessionState);
+        return renderLobbyResponse(sessionState);
+      }
+      const value = customId.slice("lobby:duration:".length);
+      if (value === "custom") {
+        return buildLobbyDurationModal(`lobby:duration-modal:${interaction.channel_id}`);
+      }
+      const nextState = prepareSession(applyLobbyDurationSelection(sessionState, Number(value)), interaction);
+      await saveUpdatedSession(interaction, nextState);
+      return renderLobbyResponse(nextState);
+    }
     if (customId === "lobby:ready") {
       if (!hasLobbyState(sessionState)) {
         return ephemeralMessage("진행 중인 로비가 없습니다.");
@@ -1692,10 +1974,18 @@ export async function handleDiscordInteraction(interaction) {
       if ((sessionState.ui?.lobby?.hostId ?? author.id) !== author.id) {
         return ephemeralMessage("호스트만 Experience를 시작할 수 있습니다.");
       }
+      const selectedDuration = getLobbySelectedDuration(sessionState);
+      if (!selectedDuration) {
+        return ephemeralMessage("먼저 진행 시간을 선택해 주세요.");
+      }
       const baseExperience =
         sessionState.experience ??
-        createExperience({ participantNames: lobbyPlayers.map((player) => player.name) }).experience;
-      const startedExperience = startExperience(syncExperienceParticipants(baseExperience, lobbyPlayers));
+        createExperience({
+          participantNames: lobbyPlayers.map((player) => player.name),
+          plannedDurationMinutes: selectedDuration
+        }).experience;
+      const durationAwareExperience = setExperiencePlannedDuration(baseExperience, selectedDuration);
+      const startedExperience = startExperience(syncExperienceParticipants(durationAwareExperience, lobbyPlayers));
       const nextState = prepareSession(
         withUi(
           {
@@ -1703,7 +1993,7 @@ export async function handleDiscordInteraction(interaction) {
             experience: startedExperience,
             players: lobbyPlayers,
             phase: "PLAYING",
-            statusMessage: "Experience를 준비하고 있습니다..."
+            statusMessage: `Experience를 준비하고 있습니다... (${selectedDuration}분)`
           },
           { screen: "playing" }
         ),
@@ -1786,6 +2076,9 @@ export async function handleDiscordInteraction(interaction) {
       await saveUpdatedSession(interaction, published);
       return retriedEnding.response;
     }
+    if (customId.startsWith("lobby:duration-modal:")) {
+      return ephemeralMessage("진행 시간 설정은 모달 제출로 처리됩니다.");
+    }
     if (customId.startsWith("flow:")) {
       const flowId = customId.slice("flow:".length);
       const nextState = prepareSession(handleFlowSelection(sessionState, flowId), interaction);
@@ -1852,6 +2145,25 @@ export async function handleDiscordInteraction(interaction) {
     const values = getModalValues(interaction);
     const author = getAuthor(interaction);
     const customId = interaction.data?.custom_id ?? "";
+    if (customId.startsWith("lobby:duration-modal:")) {
+      if (!hasLobbyState(sessionState)) {
+        return ephemeralMessage("진행 중인 로비가 없습니다.");
+      }
+      if ((sessionState.ui?.lobby?.hostId ?? author.id) !== author.id) {
+        return ephemeralMessage("호스트만 진행 시간을 설정할 수 있습니다.");
+      }
+      if (getLobbySelectedDuration(sessionState)) {
+        await saveUpdatedSession(interaction, sessionState);
+        return renderLobbyResponse(sessionState);
+      }
+      const minutes = Number(values.durationMinutes ?? values.minutes ?? values.duration ?? "");
+      if (!Number.isFinite(minutes) || minutes <= 0) {
+        return ephemeralMessage("진행 시간을 확인할 수 없습니다.");
+      }
+      const nextState = prepareSession(applyLobbyDurationSelection(sessionState, minutes), interaction);
+      await saveUpdatedSession(interaction, nextState);
+      return renderLobbyResponse(nextState);
+    }
     if (customId.startsWith("scene:record-modal")) {
       const submission = submitSceneInput(sessionState, interaction, "TEXT", {
         player_id: author.id,
